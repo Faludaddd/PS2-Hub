@@ -1,4 +1,4 @@
-local VERSION = "2.0.0"
+local VERSION = "2.1.0"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
@@ -338,552 +338,724 @@ end
 
 local GameProfile = {}
 do
-        GameProfile.gameName = "Project Slayers 2"
-        GameProfile.targetPlaceIds = {}
-        GameProfile.ready = false
-        GameProfile.status = "PENDING_RELEASE"
-        GameProfile.lockReason = "Project Slayers 2 is not released yet. Game-specific features stay locked until the instance data is provided."
+		GameProfile.gameName = "Project Slayers 2"
+		GameProfile.targetPlaceIds = {}
+		GameProfile.ready = false
+		GameProfile.status = "PENDING_RELEASE"
+		GameProfile.lockReason = "Project Slayers 2 is not released yet. Game-specific features stay locked until the instance data is provided."
 
-        GameProfile.data = {
-                npcs = {},
-                teleportPoints = {},
-                quests = {},
-                remotes = {},
-                mobs = {},
-                clans = {
-                        menuGui = "",
-                        rerollButton = "",
-                        rerollRemote = "",
-                        clanLabel = "",
-                        clanList = {},
-                },
-                stats = {},
-        }
+		GameProfile.data = {
+				npcs = {},
+				teleportPoints = {},
+				quests = {},
+				remotes = {},
+				mobs = {},
+				clans = {
+						menuGui = "",
+						rerollButton = "",
+						rerollRemote = "",
+						clanLabel = "",
+						clanList = {},
+				},
+				stats = {},
+		}
 
-        function GameProfile.load(profileData)
-                if type(profileData) ~= "table" then
-                        Logger.warn("GameProfile.load expects a table")
-                        return false
-                end
-                for key, value in pairs(profileData) do
-                        GameProfile.data[key] = value
-                end
-                if profileData.placeIds then
-                        GameProfile.targetPlaceIds = profileData.placeIds
-                end
-                GameProfile.ready = true
-                GameProfile.status = "ACTIVE"
-                GameProfile.lockReason = ""
-                Logger.info("GameProfile loaded: " .. tostring(profileData.name or "unnamed"))
-                return true
-        end
+		function GameProfile.load(profileData)
+				if type(profileData) ~= "table" then
+						Logger.warn("GameProfile.load expects a table")
+						return false
+				end
+				for key, value in pairs(profileData) do
+						GameProfile.data[key] = value
+				end
+				if profileData.placeIds then
+						GameProfile.targetPlaceIds = profileData.placeIds
+				end
+				GameProfile.ready = true
+				GameProfile.status = "ACTIVE"
+				GameProfile.lockReason = ""
+				Logger.info("GameProfile loaded: " .. tostring(profileData.name or "unnamed"))
+				return true
+		end
 
-        function GameProfile.get(path)
-                local node = GameProfile.data
-                for segment in string.gmatch(path, "[^.]+") do
-                        if type(node) ~= "table" then
-                                return nil
-                        end
-                        node = node[segment]
-                end
-                return node
-        end
+		function GameProfile.get(path)
+				local node = GameProfile.data
+				for segment in string.gmatch(path, "[^.]+") do
+						if type(node) ~= "table" then
+								return nil
+						end
+						node = node[segment]
+				end
+				return node
+		end
 
-        function GameProfile.resolvePath(path)
-                if not path or path == "" then
-                        return nil
-                end
-                local node = game
-                for segment in string.gmatch(path, "[^./]+") do
-                        if node == nil then
-                                return nil
-                        end
-                        node = node:FindFirstChild(segment)
-                end
-                return node
-        end
+		function GameProfile.resolvePath(path)
+				if not path or path == "" then
+						return nil
+				end
+				local node = game
+				for segment in string.gmatch(path, "[^./]+") do
+						if node == nil then
+								return nil
+						end
+						node = node:FindFirstChild(segment)
+				end
+				return node
+		end
 end
 
 local GameDetector = {}
 do
-        local detected = nil
+		local detected = nil
 
-        function GameDetector.detect()
-                if detected then return detected end
-                local placeId = game.PlaceId
-                local jobId = game.JobId
-                local matched = nil
-                for _, id in ipairs(GameProfile.targetPlaceIds) do
-                        if id == placeId then
-                                matched = true
-                                break
-                        end
-                end
-                detected = {
-                        placeId = placeId,
-                        jobId = jobId,
-                        gameName = (placeId > 0 and game.Name) or "Unknown",
-                        creator = (placeId > 0 and game.Creator.Name) or "",
-                        inPS2 = matched == true,
-                        supported = GameProfile.ready and matched == true,
-                }
-                return detected
-        end
+		function GameDetector.detect()
+				if detected then return detected end
+				local placeId = game.PlaceId
+				local jobId = game.JobId
+				local matched = nil
+				for _, id in ipairs(GameProfile.targetPlaceIds) do
+						if id == placeId then
+								matched = true
+								break
+						end
+				end
+				detected = {
+						placeId = placeId,
+						jobId = jobId,
+						gameName = (placeId > 0 and game.Name) or "Unknown",
+						creator = (placeId > 0 and game.Creator.Name) or "",
+						inPS2 = matched == true,
+						supported = GameProfile.ready and matched == true,
+				}
+				return detected
+		end
 
-        function GameDetector.getStatusText()
-                local info = GameDetector.detect()
-                if info.supported then
-                        return "Supported"
-                end
-                if not GameProfile.ready then
-                        return "Awaiting release"
-                end
-                return "Wrong game"
-        end
+		function GameDetector.getStatusText()
+				local info = GameDetector.detect()
+				if info.supported then
+						return "Supported"
+				end
+				if not GameProfile.ready then
+						return "Awaiting release"
+				end
+				return "Wrong game"
+		end
 
-        function GameDetector.isGameReady()
-                local info = GameDetector.detect()
-                return info.supported
-        end
+		function GameDetector.isGameReady()
+				local info = GameDetector.detect()
+				return info.supported
+		end
 
-        function GameDetector.requireGame(featureName)
-                if GameDetector.isGameReady() then
-                        return true
-                end
-                local status = GameDetector.getStatusText()
-                Util.notify(featureName or "Feature", "Locked - " .. status .. ". " .. GameProfile.lockReason, 5)
-                Logger.warn((featureName or "feature") .. " blocked: " .. status)
-                return false
-        end
+		function GameDetector.requireGame(featureName)
+				if GameDetector.isGameReady() then
+						return true
+				end
+				local status = GameDetector.getStatusText()
+				Util.notify(featureName or "Feature", "Locked - " .. status .. ". " .. GameProfile.lockReason, 5)
+				Logger.warn((featureName or "feature") .. " blocked: " .. status)
+				return false
+		end
 end
 
 local MovementController = {}
 do
-        MovementController.walkSpeed = 16
-        MovementController.jumpPower = 50
-        MovementController.flySpeed = 60
-        MovementController.sprintSpeed = 32
-        MovementController.sprintKey = Enum.KeyCode.LeftShift
-        MovementController.lockStats = false
+		MovementController.walkSpeed = 16
+		MovementController.jumpPower = 50
+		MovementController.flySpeed = 60
+		MovementController.sprintSpeed = 32
+		MovementController.sprintKey = Enum.KeyCode.LeftShift
+		MovementController.lockStats = false
+		MovementController.flyMethod = "WASD"
 
-        local flyBodyVel = nil
-        local flyBodyGyro = nil
-        local sprintActive = false
+		local flyBodyVel = nil
+		local flyBodyGyro = nil
+		local sprintActive = false
 
-        local function applyWalkSpeed()
-                local humanoid = Util.getHumanoid()
-                if humanoid then
-                        humanoid.WalkSpeed = MovementController.walkSpeed
-                end
-        end
+		local function applyWalkSpeed()
+				local humanoid = Util.getHumanoid()
+				if humanoid then
+						humanoid.WalkSpeed = MovementController.walkSpeed
+				end
+		end
 
-        local function applyJumpPower()
-                local humanoid = Util.getHumanoid()
-                if humanoid then
-                        humanoid.UseJumpPower = true
-                        humanoid.JumpPower = MovementController.jumpPower
-                end
-        end
+		local function applyJumpPower()
+				local humanoid = Util.getHumanoid()
+				if humanoid then
+						humanoid.UseJumpPower = true
+						humanoid.JumpPower = MovementController.jumpPower
+				end
+		end
 
-        function MovementController.setWalkSpeed(value)
-                MovementController.walkSpeed = value
-                if not sprintActive then
-                        applyWalkSpeed()
-                end
-        end
+		function MovementController.setWalkSpeed(value)
+				MovementController.walkSpeed = value
+				if not sprintActive then
+						applyWalkSpeed()
+				end
+		end
 
-        function MovementController.setJumpPower(value)
-                MovementController.jumpPower = value
-                applyJumpPower()
-        end
+		function MovementController.setJumpPower(value)
+				MovementController.jumpPower = value
+				applyJumpPower()
+		end
 
-        function MovementController.setFlySpeed(value)
-                MovementController.flySpeed = value
-        end
+		function MovementController.setFlySpeed(value)
+				MovementController.flySpeed = value
+		end
 
-        local function applySprintSpeed()
-                local humanoid = Util.getHumanoid()
-                if humanoid then
-                        humanoid.WalkSpeed = sprintActive and MovementController.sprintSpeed or MovementController.walkSpeed
-                end
-        end
+		function MovementController.setClickTp(enabled)
+			local want = enabled and true or false
+			if Tracker.isRunning("clicktp") == want then
+				return
+			end
+			Tracker.setRunning("clicktp", enabled)
+			if enabled then
+				local conn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+					if gameProcessed then
+						return
+					end
+					if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+						local root = Util.getRoot()
+						local camera = Workspace.CurrentCamera
+						if not root or not camera then
+								return
+						end
+						local ray = camera:ScreenPointToRay(input.Position.X, input.Position.Y)
+						local params = RaycastParams.new()
+							params.FilterType = Enum.RaycastFilterType.Exclude
+							local filter = { root }
+							if LocalPlayer.Character then
+								table.insert(filter, LocalPlayer.Character)
+							end
+							params.FilterDescendantsInstances = filter
+						local result = Workspace:Raycast(ray.Origin, ray.Direction * 1000, params)
+						if result then
+							root.CFrame = CFrame.new(result.Position + Vector3.new(0, 3, 0))
+						end
+					end
+				end)
+				Tracker.track(conn, "clicktp")
+			else
+				Tracker.cleanup("clicktp")
+			end
+		end
 
-        function MovementController.setSprintSpeed(value)
-                MovementController.sprintSpeed = value
-                if sprintActive then
-                        applySprintSpeed()
-                end
-        end
+		function MovementController.setFlyMethod(method)
+			if method == "Camera (mobile)" then
+				MovementController.flyMethod = "Camera"
+			else
+				MovementController.flyMethod = "WASD"
+			end
+		end
 
-        function MovementController.setLockStats(enabled)
-                MovementController.lockStats = enabled and true or false
-                if enabled then
-                        local conn
-                        conn = RunService.Heartbeat:Connect(function()
-                                local humanoid = Util.getHumanoid()
-                                if humanoid then
-                                        if not sprintActive and humanoid.WalkSpeed ~= MovementController.walkSpeed then
-                                                humanoid.WalkSpeed = MovementController.walkSpeed
-                                        end
-                                        if humanoid.JumpPower ~= MovementController.jumpPower then
-                                                humanoid.UseJumpPower = true
-                                                humanoid.JumpPower = MovementController.jumpPower
-                                        end
-                                end
-                        end)
-                        Tracker.track(conn, "lockstats")
-                else
-                        Tracker.cleanup("lockstats")
-                end
-        end
 
-        function MovementController.setInfiniteJump(enabled)
-                if enabled then
-                        local conn = UserInputService.JumpRequest:Connect(function()
-                                local humanoid = Util.getHumanoid()
-                                if humanoid and humanoid.Health > 0 then
-                                        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-                                end
-                        end)
-                        Tracker.track(conn, "infjump")
-                else
-                        Tracker.cleanup("infjump")
-                end
-        end
+		local function applySprintSpeed()
+				local humanoid = Util.getHumanoid()
+				if humanoid then
+						humanoid.WalkSpeed = sprintActive and MovementController.sprintSpeed or MovementController.walkSpeed
+				end
+		end
 
-        function MovementController.setNoclip(enabled)
-                if enabled then
-                        local conn = RunService.Stepped:Connect(function()
-                                local char = LocalPlayer.Character
-                                if not char then return end
-                                for _, part in ipairs(char:GetDescendants()) do
-                                        if part:IsA("BasePart") and part.CanCollide then
-                                                part.CanCollide = false
-                                        end
-                                end
-                        end)
-                        Tracker.track(conn, "noclip")
-                else
-                        Tracker.cleanup("noclip")
-                        local char = LocalPlayer.Character
-                        if char then
-                                for _, part in ipairs(char:GetDescendants()) do
-                                        if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-                                                part.CanCollide = true
-                                        end
-                                end
-                        end
-                end
-        end
+		function MovementController.setSprintSpeed(value)
+				MovementController.sprintSpeed = value
+				if sprintActive then
+						applySprintSpeed()
+				end
+		end
 
-        local function flyStep()
-                if not flyBodyVel or not flyBodyVel.Parent then return end
-                local root = Util.getRoot()
-                if not root then return end
-                local camera = Workspace.CurrentCamera
-                if not camera then return end
-                local moveDir = Vector3.zero
-                if UserInputService:IsKeyDown(Enum.KeyCode.W) then
-                        moveDir += camera.CFrame.LookVector
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.S) then
-                        moveDir -= camera.CFrame.LookVector
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.A) then
-                        moveDir -= camera.CFrame.RightVector
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.D) then
-                        moveDir += camera.CFrame.RightVector
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
-                        moveDir += Vector3.yAxis
-                end
-                if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
-                        moveDir -= Vector3.yAxis
-                end
-                if moveDir.Magnitude > 0 then
-                        flyBodyVel.Velocity = moveDir.Unit * MovementController.flySpeed
-                else
-                        flyBodyVel.Velocity = Vector3.zero
-                end
-                if flyBodyGyro and flyBodyGyro.Parent then
-                        local flatLook = Vector3.new(camera.CFrame.LookVector.X, 0, camera.CFrame.LookVector.Z)
-                        if flatLook.Magnitude > 0.01 then
-                                flyBodyGyro.CFrame = CFrame.new(root.Position, root.Position + flatLook.Unit)
-                        end
-                end
-        end
+		function MovementController.setLockStats(enabled)
 
-        function MovementController.setFly(enabled)
-                if enabled then
-                        local root = Util.getRoot()
-                        local humanoid = Util.getHumanoid()
-                        if not root or not humanoid then
-                                Util.notify("Fly", "Character not found")
-                                return false
-                        end
-                        humanoid:ChangeState(Enum.HumanoidStateType.Physics)
-                        Tracker.setRunning("fly", true)
-                        flyBodyVel = Instance.new("BodyVelocity")
-                        flyBodyVel.Name = "PS2HubFly"
-                        flyBodyVel.MaxForce = Vector3.new(1e9, 1e9, 1e9)
-                        flyBodyVel.Velocity = Vector3.zero
-                        flyBodyVel.Parent = root
-                        flyBodyGyro = Instance.new("BodyGyro")
-                        flyBodyGyro.Name = "PS2HubGyro"
-                        flyBodyGyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
-                        flyBodyGyro.P = 9e4
-                        flyBodyGyro.CFrame = root.CFrame
-                        flyBodyGyro.Parent = root
-                        Tracker.trackInstance(flyBodyVel, "fly")
-                        Tracker.trackInstance(flyBodyGyro, "fly")
-                        local conn = RunService.RenderStepped:Connect(flyStep)
-                        Tracker.track(conn, "fly")
-                        return true
-                else
-                        Tracker.cleanup("fly")
-                        Tracker.setRunning("fly", false)
-                        flyBodyVel = nil
-                        flyBodyGyro = nil
-                        local humanoid = Util.getHumanoid()
-                        if humanoid then
-                                humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
-                        end
-                        return true
-                end
-        end
+		local want = enabled and true or false
 
-        function MovementController.setSprintKey(keyCode)
-                MovementController.sprintKey = keyCode or Enum.KeyCode.LeftShift
-        end
+			if Tracker.isRunning("lockstats") == want then
 
-        local sprintInputConn
-        function MovementController.setSprint(enabled)
-                if enabled then
-                        sprintInputConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
-                                if gameProcessed then return end
-                                if input.KeyCode == MovementController.sprintKey then
-                                        sprintActive = true
-                                        applySprintSpeed()
-                                end
-                        end)
-                        Tracker.track(sprintInputConn, "sprint")
-                        sprintInputConn = UserInputService.InputEnded:Connect(function(input)
-                                if input.KeyCode == MovementController.sprintKey then
-                                        sprintActive = false
-                                        applySprintSpeed()
-                                end
-                        end)
-                        Tracker.track(sprintInputConn, "sprint")
-                else
-                        Tracker.cleanup("sprint")
-                        sprintActive = false
-                        applyWalkSpeed()
-                end
-        end
+				return
 
-        local respawnConn
-        function MovementController.init()
-                respawnConn = LocalPlayer.CharacterAdded:Connect(function()
-                        task.wait(0.5)
-                        applyWalkSpeed()
-                        applyJumpPower()
-                        if Tracker.isRunning("fly") and flyBodyVel then
-                                MovementController.setFly(false)
-                                MovementController.setFly(true)
-                        end
-                end)
-                Tracker.track(respawnConn, "respawn")
-        end
+			end
+
+		Tracker.setRunning("lockstats", enabled)
+
+				MovementController.lockStats = enabled and true or false
+				if enabled then
+						local conn
+						conn = RunService.Heartbeat:Connect(function()
+								local humanoid = Util.getHumanoid()
+								if humanoid then
+										if not sprintActive and humanoid.WalkSpeed ~= MovementController.walkSpeed then
+												humanoid.WalkSpeed = MovementController.walkSpeed
+										end
+										if humanoid.JumpPower ~= MovementController.jumpPower then
+												humanoid.UseJumpPower = true
+												humanoid.JumpPower = MovementController.jumpPower
+										end
+								end
+						end)
+						Tracker.track(conn, "lockstats")
+				else
+						Tracker.cleanup("lockstats")
+				end
+		end
+
+		function MovementController.setInfiniteJump(enabled)
+
+		local want = enabled and true or false
+
+			if Tracker.isRunning("infjump") == want then
+
+				return
+
+			end
+
+		Tracker.setRunning("infjump", enabled)
+
+				if enabled then
+						local conn = UserInputService.JumpRequest:Connect(function()
+								local humanoid = Util.getHumanoid()
+								if humanoid and humanoid.Health > 0 then
+										humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+								end
+						end)
+						Tracker.track(conn, "infjump")
+				else
+						Tracker.cleanup("infjump")
+				end
+		end
+
+		function MovementController.setNoclip(enabled)
+
+		local want = enabled and true or false
+
+			if Tracker.isRunning("noclip") == want then
+
+				return
+
+			end
+
+		Tracker.setRunning("noclip", enabled)
+
+				if enabled then
+						local conn = RunService.Stepped:Connect(function()
+								local char = LocalPlayer.Character
+								if not char then return end
+								for _, part in ipairs(char:GetDescendants()) do
+										if part:IsA("BasePart") and part.CanCollide then
+												part.CanCollide = false
+										end
+								end
+						end)
+						Tracker.track(conn, "noclip")
+				else
+						Tracker.cleanup("noclip")
+						local char = LocalPlayer.Character
+						if char then
+								for _, part in ipairs(char:GetDescendants()) do
+										if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+												part.CanCollide = true
+										end
+								end
+						end
+				end
+		end
+
+		local function flyStep()
+				if not flyBodyVel or not flyBodyVel.Parent then return end
+				local root = Util.getRoot()
+				if not root then return end
+				local camera = Workspace.CurrentCamera
+				if not camera then return end
+				local moveDir = Vector3.zero
+				if MovementController.flyMethod == "Camera" then
+					moveDir = camera.CFrame.LookVector
+					if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+						moveDir += Vector3.yAxis * 0.5
+					end
+					if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+						moveDir -= Vector3.yAxis * 0.5
+					end
+				elseif UserInputService:IsKeyDown(Enum.KeyCode.W) then
+						moveDir += camera.CFrame.LookVector
+				end
+				if UserInputService:IsKeyDown(Enum.KeyCode.S) then
+						moveDir -= camera.CFrame.LookVector
+				end
+				if UserInputService:IsKeyDown(Enum.KeyCode.A) then
+						moveDir -= camera.CFrame.RightVector
+				end
+				if UserInputService:IsKeyDown(Enum.KeyCode.D) then
+						moveDir += camera.CFrame.RightVector
+				end
+				if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+						moveDir += Vector3.yAxis
+				end
+				if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then
+						moveDir -= Vector3.yAxis
+				end
+				if moveDir.Magnitude > 0 then
+						flyBodyVel.Velocity = moveDir.Unit * MovementController.flySpeed
+				else
+						flyBodyVel.Velocity = Vector3.zero
+				end
+				if flyBodyGyro and flyBodyGyro.Parent then
+						local flatLook = Vector3.new(camera.CFrame.LookVector.X, 0, camera.CFrame.LookVector.Z)
+						if flatLook.Magnitude > 0.01 then
+								flyBodyGyro.CFrame = CFrame.new(root.Position, root.Position + flatLook.Unit)
+						end
+				end
+		end
+
+		function MovementController.setFly(enabled)
+
+		local want = enabled and true or false
+
+			if Tracker.isRunning("fly") == want then
+
+				return true
+
+			end
+
+		Tracker.setRunning("fly", enabled)
+
+				if enabled then
+						local root = Util.getRoot()
+						local humanoid = Util.getHumanoid()
+						if not root or not humanoid then
+								Util.notify("Fly", "Character not found")
+								return false
+						end
+						humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+						Tracker.setRunning("fly", true)
+						flyBodyVel = Instance.new("BodyVelocity")
+						flyBodyVel.Name = "PS2HubFly"
+						flyBodyVel.MaxForce = Vector3.new(1e9, 1e9, 1e9)
+						flyBodyVel.Velocity = Vector3.zero
+						flyBodyVel.Parent = root
+						flyBodyGyro = Instance.new("BodyGyro")
+						flyBodyGyro.Name = "PS2HubGyro"
+						flyBodyGyro.MaxTorque = Vector3.new(1e9, 1e9, 1e9)
+						flyBodyGyro.P = 9e4
+						flyBodyGyro.CFrame = root.CFrame
+						flyBodyGyro.Parent = root
+						Tracker.trackInstance(flyBodyVel, "fly")
+						Tracker.trackInstance(flyBodyGyro, "fly")
+						local conn = RunService.RenderStepped:Connect(flyStep)
+						Tracker.track(conn, "fly")
+						return true
+				else
+						Tracker.cleanup("fly")
+						Tracker.setRunning("fly", false)
+						flyBodyVel = nil
+						flyBodyGyro = nil
+						local humanoid = Util.getHumanoid()
+						if humanoid then
+								humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+						end
+						return true
+				end
+		end
+
+		function MovementController.setSprintKey(keyCode)
+				MovementController.sprintKey = keyCode or Enum.KeyCode.LeftShift
+		end
+
+		local sprintInputConn
+		function MovementController.setSprint(enabled)
+		local want = enabled and true or false
+			if Tracker.isRunning("sprint") == want then
+				return
+			end
+		Tracker.setRunning("sprint", enabled)
+
+				if enabled then
+						sprintInputConn = UserInputService.InputBegan:Connect(function(input, gameProcessed)
+								if gameProcessed then return end
+								if input.KeyCode == MovementController.sprintKey then
+										sprintActive = true
+										applySprintSpeed()
+								end
+						end)
+						Tracker.track(sprintInputConn, "sprint")
+						sprintInputConn = UserInputService.InputEnded:Connect(function(input)
+								if input.KeyCode == MovementController.sprintKey then
+										sprintActive = false
+										applySprintSpeed()
+								end
+						end)
+						Tracker.track(sprintInputConn, "sprint")
+				else
+						Tracker.cleanup("sprint")
+						sprintActive = false
+						applyWalkSpeed()
+				end
+		end
+
+		local respawnConn
+		function MovementController.init()
+				respawnConn = LocalPlayer.CharacterAdded:Connect(function()
+						task.wait(0.5)
+						applyWalkSpeed()
+						applyJumpPower()
+						if Tracker.isRunning("fly") and flyBodyVel then
+								MovementController.setFly(false)
+								MovementController.setFly(true)
+						end
+				end)
+				Tracker.track(respawnConn, "respawn")
+		end
 end
 
 local CharacterController = {}
 do
-        function CharacterController.setGod(enabled)
-                if enabled then
-                        local conn
-                        conn = RunService.Heartbeat:Connect(function()
-                                local humanoid = Util.getHumanoid()
-                                if humanoid and humanoid.Health > 0 and humanoid.Health < humanoid.MaxHealth then
-                                        humanoid.Health = humanoid.MaxHealth
-                                end
-                        end)
-                        Tracker.track(conn, "god")
-                else
-                        Tracker.cleanup("god")
-                end
-        end
+		function CharacterController.setGod(enabled)
+		local want = enabled and true or false
+			if Tracker.isRunning("god") == want then
+				return
+			end
+		Tracker.setRunning("god", enabled)
 
-        function CharacterController.setAntiAFK(enabled)
-                if enabled then
-                        local VirtualUser = GetService("VirtualUser")
-                        local conn = LocalPlayer.Idled:Connect(function()
-                                VirtualUser:CaptureController()
-                                VirtualUser:ClickButton2(Vector2.new())
-                        end)
-                        Tracker.track(conn, "antiafk")
-                else
-                        Tracker.cleanup("antiafk")
-                end
-        end
+				if enabled then
+						local conn
+						conn = RunService.Heartbeat:Connect(function()
+								local humanoid = Util.getHumanoid()
+								if humanoid and humanoid.Health > 0 and humanoid.Health < humanoid.MaxHealth then
+										humanoid.Health = humanoid.MaxHealth
+								end
+						end)
+						Tracker.track(conn, "god")
+				else
+						Tracker.cleanup("god")
+				end
+		end
 
-        function CharacterController.reset()
-                local humanoid = Util.getHumanoid()
-                if humanoid then
-                        humanoid.Health = 0
-                end
-        end
+		function CharacterController.setAntiAFK(enabled)
+
+		local want = enabled and true or false
+
+			if Tracker.isRunning("antiafk") == want then
+
+				return
+
+			end
+
+		Tracker.setRunning("antiafk", enabled)
+
+				if enabled then
+						local VirtualUser = GetService("VirtualUser")
+						local conn = LocalPlayer.Idled:Connect(function()
+								VirtualUser:CaptureController()
+								VirtualUser:ClickButton2(Vector2.new())
+						end)
+						Tracker.track(conn, "antiafk")
+				else
+						Tracker.cleanup("antiafk")
+				end
+		end
+
+		function CharacterController.reset()
+				local humanoid = Util.getHumanoid()
+				if humanoid then
+						humanoid.Health = 0
+				end
+		end
 end
 
 local PlayerController = {}
 do
-        PlayerController.selected = ""
+		PlayerController.selected = ""
 
-        local function refreshCallback() end
-        function PlayerController.onRefresh(fn)
-                refreshCallback = fn or function() end
-        end
+		local function refreshCallback() end
+		function PlayerController.onRefresh(fn)
+				refreshCallback = fn or function() end
+		end
 
-        function PlayerController.getPlayerNames()
-                local names = {}
-                for _, player in ipairs(Players:GetPlayers()) do
-                        if player ~= LocalPlayer then
-                                table.insert(names, player.Name)
-                        end
-                end
-                return names
-        end
+		function PlayerController.getPlayerNames()
+				local names = {}
+				for _, player in ipairs(Players:GetPlayers()) do
+						if player ~= LocalPlayer then
+								table.insert(names, player.Name)
+						end
+				end
+				return names
+		end
 
-        function PlayerController.select(name)
-                PlayerController.selected = name or ""
-        end
+		function PlayerController.select(name)
+				PlayerController.selected = name or ""
+		end
 
-        function PlayerController.teleportToSelected()
-                local target = Players:FindFirstChild(PlayerController.selected)
-                if not target then
-                        Util.notify("Teleport", "Select a player first")
-                        return false
-                end
-                local rootTarget = Util.getRoot(target)
-                local root = Util.getRoot()
-                if not rootTarget or not root then
-                        Util.notify("Teleport", "Target position unavailable")
-                        return false
-                end
-                root.CFrame = rootTarget.CFrame * CFrame.new(0, 0, 3)
-                return true
-        end
+		function PlayerController.teleportToSelected()
+				local target = Players:FindFirstChild(PlayerController.selected)
+				if not target then
+						Util.notify("Teleport", "Select a player first")
+						return false
+				end
+				local rootTarget = Util.getRoot(target)
+				local root = Util.getRoot()
+				if not rootTarget or not root then
+						Util.notify("Teleport", "Target position unavailable")
+						return false
+				end
+				root.CFrame = rootTarget.CFrame * CFrame.new(0, 0, 3)
+				return true
+		end
 
-        local connAdded, connRemoving
-        function PlayerController.init()
-                connAdded = Players.PlayerAdded:Connect(function()
-                        task.wait(1)
-                        refreshCallback()
-                end)
-                Tracker.track(connAdded, "playerlist")
-                connRemoving = Players.PlayerRemoving:Connect(function()
-                        task.wait(1)
-                        refreshCallback()
-                end)
-                Tracker.track(connRemoving, "playerlist")
-        end
+
+		function PlayerController.setFollow(enabled)
+
+			local want = enabled and true or false
+
+			if Tracker.isRunning("follow") == want then
+
+				return
+
+			end
+
+			Tracker.setRunning("follow", enabled)
+
+			if enabled then
+
+				local conn = RunService.Heartbeat:Connect(function()
+
+					local target = Players:FindFirstChild(PlayerController.selected)
+
+					local rootTarget = target and Util.getRoot(target)
+
+					local root = Util.getRoot()
+
+					if rootTarget and root and Util.isAlive() then
+
+						local delta = rootTarget.Position - root.Position
+
+						if delta.Magnitude > 4 then
+
+							local step = delta.Unit * math.min(delta.Magnitude - 3, 1)
+
+							root.CFrame = CFrame.new(root.Position + step, rootTarget.Position)
+
+						end
+
+					end
+
+				end)
+
+				Tracker.track(conn, "follow")
+
+			else
+
+				Tracker.cleanup("follow")
+
+			end
+
+		end
+
+
+		local connAdded, connRemoving
+		function PlayerController.init()
+				connAdded = Players.PlayerAdded:Connect(function()
+						task.wait(1)
+						refreshCallback()
+				end)
+				Tracker.track(connAdded, "playerlist")
+				connRemoving = Players.PlayerRemoving:Connect(function()
+						task.wait(1)
+						refreshCallback()
+				end)
+				Tracker.track(connRemoving, "playerlist")
+		end
 end
 
 local ToolController = {}
 do
-        ToolController.autoEquip = false
-        ToolController.lastToolName = ""
-        ToolController.selected = ""
+		ToolController.autoEquip = false
+		ToolController.lastToolName = ""
+		ToolController.selected = ""
 
-        local refreshCallback = function() end
-        function ToolController.onRefresh(fn)
-                refreshCallback = fn or function() end
-        end
+		local refreshCallback = function() end
+		function ToolController.onRefresh(fn)
+				refreshCallback = fn or function() end
+		end
 
-        function ToolController.getToolNames()
-                local names = {}
-                for _, tool in ipairs(Util.getTools()) do
-                        table.insert(names, tool.Name)
-                end
-                return names
-        end
+		function ToolController.getToolNames()
+				local names = {}
+				for _, tool in ipairs(Util.getTools()) do
+						table.insert(names, tool.Name)
+				end
+				return names
+		end
 
-        function ToolController.select(name)
-                ToolController.selected = name or ""
-        end
+		function ToolController.select(name)
+				ToolController.selected = name or ""
+		end
 
-        function ToolController.equipSelected()
-                local humanoid = Util.getHumanoid()
-                if not humanoid then
-                        Util.notify("Equip", "No character")
-                        return false
-                end
-                for _, tool in ipairs(Util.getTools()) do
-                        if tool.Name == ToolController.selected then
-                                ToolController.lastToolName = tool.Name
-                                humanoid:EquipTool(tool)
-                                return true
-                        end
-                end
-                Util.notify("Equip", "Tool not found: " .. tostring(ToolController.selected))
-                return false
-        end
+		function ToolController.equipSelected()
+				local humanoid = Util.getHumanoid()
+				if not humanoid then
+						Util.notify("Equip", "No character")
+						return false
+				end
+				for _, tool in ipairs(Util.getTools()) do
+						if tool.Name == ToolController.selected then
+								ToolController.lastToolName = tool.Name
+								humanoid:EquipTool(tool)
+								return true
+						end
+				end
+				Util.notify("Equip", "Tool not found: " .. tostring(ToolController.selected))
+				return false
+		end
 
-        function ToolController.unequip()
-                local humanoid = Util.getHumanoid()
-                if humanoid then
-                        humanoid:UnequipTools()
-                end
-        end
+		function ToolController.unequip()
+				local humanoid = Util.getHumanoid()
+				if humanoid then
+						humanoid:UnequipTools()
+				end
+		end
 
-        function ToolController.setAutoEquip(enabled)
-                ToolController.autoEquip = enabled and true or false
-                if enabled then
-                        local conn = LocalPlayer.CharacterAdded:Connect(function()
-                                task.wait(1)
-                                if ToolController.autoEquip and ToolController.lastToolName ~= "" then
-                                        for _, tool in ipairs(Util.getTools()) do
-                                                if tool.Name == ToolController.lastToolName then
-                                                        local humanoid = Util.getHumanoid()
-                                                        if humanoid then
-                                                                humanoid:EquipTool(tool)
-                                                        end
-                                                        break
-                                                end
-                                        end
-                                end
-                        end)
-                        Tracker.track(conn, "autoequip")
-                else
-                        Tracker.cleanup("autoequip")
-                end
-        end
+		function ToolController.setAutoEquip(enabled)
+				ToolController.autoEquip = enabled and true or false
+				if enabled then
+						local conn = LocalPlayer.CharacterAdded:Connect(function()
+								task.wait(1)
+								if ToolController.autoEquip and ToolController.lastToolName ~= "" then
+										for _, tool in ipairs(Util.getTools()) do
+												if tool.Name == ToolController.lastToolName then
+														local humanoid = Util.getHumanoid()
+														if humanoid then
+																humanoid:EquipTool(tool)
+														end
+														break
+												end
+										end
+								end
+						end)
+						Tracker.track(conn, "autoequip")
+				else
+						Tracker.cleanup("autoequip")
+				end
+		end
 
-        local backpackConn
-        function ToolController.init()
-                local backpack = Util.getBackpack()
-                if backpack then
-                        backpackConn = backpack.ChildAdded:Connect(function()
-                                task.wait(0.2)
-                                refreshCallback()
-                        end)
-                        Tracker.track(backpackConn, "toollist")
-                end
-                local charConn = LocalPlayer.CharacterAdded:Connect(function()
-                        task.wait(1)
-                        local newBackpack = Util.getBackpack()
-                        if newBackpack then
-                                Tracker.cleanup("toollist")
-                                backpackConn = newBackpack.ChildAdded:Connect(function()
-                                        task.wait(0.2)
-                                        refreshCallback()
-                                end)
-                                Tracker.track(backpackConn, "toollist")
-                        end
-                        refreshCallback()
-                end)
-                Tracker.track(charConn, "toollist")
-        end
+		local backpackConn
+		function ToolController.init()
+				local backpack = Util.getBackpack()
+				if backpack then
+						backpackConn = backpack.ChildAdded:Connect(function()
+								task.wait(0.2)
+								refreshCallback()
+						end)
+						Tracker.track(backpackConn, "toollist")
+				end
+				local charConn = LocalPlayer.CharacterAdded:Connect(function()
+						task.wait(1)
+						local newBackpack = Util.getBackpack()
+						if newBackpack then
+								Tracker.cleanup("toollist")
+								backpackConn = newBackpack.ChildAdded:Connect(function()
+										task.wait(0.2)
+										refreshCallback()
+								end)
+								Tracker.track(backpackConn, "toollist")
+						end
+						refreshCallback()
+				end)
+				Tracker.track(charConn, "toollist")
+		end
 end
 
 local ESPController = {}
@@ -893,6 +1065,7 @@ do
 		npcs = false,
 		names = true,
 		distance = true,
+		healthBars = true,
 		teamColor = false,
 		tracers = false,
 		maxDistance = 250,
@@ -980,13 +1153,15 @@ do
 
 		local nameLabel
 		local distLabel
+		local healthBack
+		local healthFill
 		local bb
-		if ESPController.options.names or ESPController.options.distance then
+		if ESPController.options.names or ESPController.options.distance or ESPController.options.healthBars then
 			bb = Instance.new("BillboardGui")
 			bb.Name = "PS2HubESP_Label"
 			bb.Adornee = root
 			bb.AlwaysOnTop = true
-			bb.Size = UDim2.new(0, 220, 0, 44)
+			bb.Size = UDim2.new(0, 220, 0, 46)
 			bb.StudsOffset = Vector3.new(0, 2.5, 0)
 			nameLabel = Instance.new("TextLabel")
 			nameLabel.BackgroundTransparency = 1
@@ -1007,6 +1182,20 @@ do
 			distLabel.TextStrokeTransparency = 0.6
 			distLabel.Text = ""
 			distLabel.Parent = bb
+			healthBack = Instance.new("Frame")
+			healthBack.Name = "PS2HubESP_Health"
+			healthBack.AnchorPoint = Vector2.new(0.5, 0)
+			healthBack.Position = UDim2.new(0.5, 0, 0, 41)
+			healthBack.Size = UDim2.new(0, 120, 0, 4)
+			healthBack.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+			healthBack.BackgroundTransparency = 0.25
+			healthBack.BorderSizePixel = 0
+			healthBack.Parent = bb
+			healthFill = Instance.new("Frame")
+			healthFill.Size = UDim2.new(1, 0, 1, 0)
+			healthFill.BackgroundColor3 = Color3.fromRGB(0, 255, 128)
+			healthFill.BorderSizePixel = 0
+			healthFill.Parent = healthBack
 			bb.Parent = getEspGui()
 		end
 
@@ -1021,6 +1210,8 @@ do
 			billboard = bb,
 			nameLabel = nameLabel,
 			distLabel = distLabel,
+			healthBack = healthBack,
+			healthFill = healthFill,
 			tracer = tracer,
 			root = root,
 			humanoid = humanoid,
@@ -1094,11 +1285,22 @@ do
 				end
 				if entry.billboard then
 					entry.billboard.Enabled = inRange
-					if entry.distLabel and ESPController.options.distance then
-						entry.distLabel.Text = tostring(Util.round(dist, 0)) .. " studs"
+					if entry.distLabel then
+						entry.distLabel.Visible = ESPController.options.distance
+						if ESPController.options.distance then
+							entry.distLabel.Text = tostring(Util.round(dist, 0)) .. " studs"
+						end
 					end
 					if entry.nameLabel then
 						entry.nameLabel.Visible = ESPController.options.names
+					end
+					if entry.healthBack then
+						entry.healthBack.Visible = ESPController.options.healthBars
+						if ESPController.options.healthBars and entry.humanoid and entry.humanoid.MaxHealth > 0 then
+							local pct = math.clamp(entry.humanoid.Health / entry.humanoid.MaxHealth, 0, 1)
+							entry.healthFill.Size = UDim2.new(pct, 0, 1, 0)
+							entry.healthFill.BackgroundColor3 = Color3.fromRGB(255 * (1 - pct), 255 * pct, 60)
+						end
 					end
 				end
 				if entry.tracer then
@@ -1121,7 +1323,11 @@ do
 	end
 
 	function ESPController.setPlayers(enabled)
-		ESPController.options.players = enabled and true or false
+		local want = enabled and true or false
+		if Tracker.isRunning("espplayers") == want then
+			return
+		end
+		ESPController.options.players = want
 		Tracker.setRunning("espplayers", enabled)
 		if enabled then
 			for _, player in ipairs(Players:GetPlayers()) do
@@ -1156,18 +1362,32 @@ do
 			end
 		end
 		local found = {}
-		for _, model in ipairs(Workspace:GetChildren()) do
-			if model:IsA("Model") and not playerChars[model] and model ~= LocalPlayer.Character then
-				local humanoid = model:FindFirstChildOfClass("Humanoid")
-				if humanoid and humanoid.Health > 0 then
-					local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-					if root and Util.distanceTo(root) <= ESPController.options.maxDistance * 2 then
-						found[model] = true
-						addTarget(model, "npcs")
+		local scanned = 0
+		local maxDist = ESPController.options.maxDistance * 2
+		local function scanContainer(container, depth)
+			if depth > 3 or scanned > 2500 then
+				return
+			end
+			for _, child in ipairs(container:GetChildren()) do
+				scanned += 1
+				if child:IsA("Model") then
+					if not playerChars[child] and child ~= LocalPlayer.Character then
+						local humanoid = child:FindFirstChildOfClass("Humanoid")
+						if humanoid and humanoid.Health > 0 then
+							local root = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart
+							if root and Util.distanceTo(root) <= maxDist then
+								found[child] = true
+								addTarget(child, "npcs")
+							end
+						end
 					end
+					scanContainer(child, depth + 1)
+				elseif child:IsA("Folder") then
+					scanContainer(child, depth + 1)
 				end
 			end
 		end
+		scanContainer(Workspace, 1)
 		for model, entry in pairs(targets) do
 			if entry.category == "npcs" and not found[model] then
 				removeTarget(model)
@@ -1176,7 +1396,11 @@ do
 	end
 
 	function ESPController.setNpcs(enabled)
-		ESPController.options.npcs = enabled and true or false
+		local want = enabled and true or false
+		if Tracker.isRunning("npcscan") == want then
+			return
+		end
+		ESPController.options.npcs = want
 		if enabled then
 			Tracker.setRunning("npcscan", true)
 			task.spawn(function()
@@ -1249,6 +1473,10 @@ do
 	end
 
 	function ESPController.setTracers(enabled)
+		local want = enabled and true or false
+		if ESPController.options.tracers == want then
+			return true
+		end
 		if enabled and not drawingAvailable then
 			Util.notify("Tracers", "Drawing API not supported on this platform")
 			return false
@@ -1263,6 +1491,10 @@ do
 			end
 		end
 		return true
+	end
+
+	function ESPController.setHealthBars(enabled)
+		ESPController.options.healthBars = enabled and true or false
 	end
 
 	function ESPController.setMaxDistance(value)
@@ -1519,6 +1751,10 @@ do
 	end
 
 	function FarmController.setEnabled(enabled)
+		local want = enabled and true or false
+		if FarmController.settings.enabled == want then
+			return want
+		end
 		if enabled then
 			if not GameDetector.requireGame("Auto Farm") then
 				return false
@@ -1671,6 +1907,10 @@ do
 
 	local rerollLoopActive = false
 	function ClanController.setEnabled(enabled)
+		local want = enabled and true or false
+		if ClanController.settings.enabled == want then
+			return want
+		end
 		if enabled then
 			if not GameDetector.requireGame("Clan Reroll") then
 				return false
@@ -1747,202 +1987,225 @@ end
 
 local SettingsController = {}
 do
-        local lightingBackup = nil
-        local fpsBoostLevel = "off"
-        local particleBackups = {}
-        local textureBackups = {}
+		local lightingBackup = nil
+		local fpsBoostLevel = "off"
+		local particleBackups = {}
+		local textureBackups = {}
 
-        local function backupLighting()
-                if lightingBackup then
-                        return
-                end
-                lightingBackup = {
-                        Brightness = Lighting.Brightness,
-                        ClockTime = Lighting.ClockTime,
-                        FogEnd = Lighting.FogEnd,
-                        GlobalShadows = Lighting.GlobalShadows,
-                        OutdoorAmbient = Lighting.OutdoorAmbient,
-                        ExposureCompensation = Lighting.ExposureCompensation,
-                }
-        end
+		local function backupLighting()
+				if lightingBackup then
+						return
+				end
+				lightingBackup = {
+						Brightness = Lighting.Brightness,
+						ClockTime = Lighting.ClockTime,
+						FogEnd = Lighting.FogEnd,
+						GlobalShadows = Lighting.GlobalShadows,
+						OutdoorAmbient = Lighting.OutdoorAmbient,
+						ExposureCompensation = Lighting.ExposureCompensation,
+				}
+		end
 
-        function SettingsController.setNotifications(enabled)
-                State.set("notifications", enabled and true or false)
-        end
+		function SettingsController.setNotifications(enabled)
+				State.set("notifications", enabled and true or false)
+		end
 
-        function SettingsController.setAutoReexecute(enabled)
-                State.set("autoReexecute", enabled and true or false)
-        end
+		function SettingsController.setAutoReexecute(enabled)
+				State.set("autoReexecute", enabled and true or false)
+		end
 
-        function SettingsController.isAutoReexecute()
-                return State.get("autoReexecute", true) ~= false
-        end
+		function SettingsController.isAutoReexecute()
+				return State.get("autoReexecute", true) ~= false
+		end
 
-        function SettingsController.setFullbright(enabled)
-                if enabled then
-                        backupLighting()
-                        Lighting.Brightness = 2
-                        Lighting.ClockTime = 14
-                        Lighting.FogEnd = 100000
-                        Lighting.GlobalShadows = false
-                        Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
-                else
-                        if lightingBackup then
-                                Lighting.Brightness = lightingBackup.Brightness
-                                Lighting.ClockTime = lightingBackup.ClockTime
-                                Lighting.FogEnd = lightingBackup.FogEnd
-                                Lighting.GlobalShadows = lightingBackup.GlobalShadows
-                                Lighting.OutdoorAmbient = lightingBackup.OutdoorAmbient
-                        end
-                end
-        end
+		function SettingsController.setFullbright(enabled)
+				if enabled then
+						backupLighting()
+						Lighting.Brightness = 2
+						Lighting.ClockTime = 14
+						Lighting.FogEnd = 100000
+						Lighting.GlobalShadows = false
+						Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
+				else
+						if lightingBackup then
+								Lighting.Brightness = lightingBackup.Brightness
+								Lighting.ClockTime = lightingBackup.ClockTime
+								Lighting.FogEnd = lightingBackup.FogEnd
+								Lighting.GlobalShadows = lightingBackup.GlobalShadows
+								Lighting.OutdoorAmbient = lightingBackup.OutdoorAmbient
+						end
+				end
+		end
 
-        local function applyFpsBoost(level)
-                local conn
-                if level == "off" then
-                        Lighting.GlobalShadows = lightingBackup and lightingBackup.GlobalShadows or true
-                        for emitter, state in pairs(particleBackups) do
-                                pcall(function() emitter.Enabled = state end)
-                        end
-                        particleBackups = {}
-                        if level == "off" then
-                                for part, texId in pairs(textureBackups) do
-                                        pcall(function() part.TextureID = texId end)
-                                end
-                                textureBackups = {}
-                        end
-                        return
-                end
-                backupLighting()
-                Lighting.GlobalShadows = false
-                local scan = function()
-                        local count = 0
-                        for _, obj in ipairs(Workspace:GetDescendants()) do
-                                if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
-                                        if particleBackups[obj] == nil then
-                                                particleBackups[obj] = obj.Enabled
-                                                obj.Enabled = false
-                                                count += 1
-                                        end
-                                elseif level == "full" and obj:IsA("MeshPart") and obj.TextureID ~= "" then
-                                        if textureBackups[obj] == nil then
-                                                textureBackups[obj] = obj.TextureID
-                                                obj.TextureID = ""
-                                                count += 1
-                                        end
-                                end
-                                if count > 800 then
-                                        break
-                                end
-                        end
-                end
-                local ok, err = pcall(scan)
-                if not ok then
-                        Logger.warn("fps boost scan failed: " .. tostring(err))
-                end
-                conn = Workspace.DescendantAdded:Connect(function(obj)
-                        task.defer(function()
-                                if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
-                                        particleBackups[obj] = obj.Enabled
-                                        obj.Enabled = false
-                                end
-                        end)
-                end)
-                Tracker.track(conn, "fpsboost")
-        end
+		local function applyFpsBoost(level)
+				local conn
+				if level == "off" then
+						Lighting.GlobalShadows = lightingBackup and lightingBackup.GlobalShadows or true
+						for emitter, state in pairs(particleBackups) do
+								pcall(function() emitter.Enabled = state end)
+						end
+						particleBackups = {}
+						if level == "off" then
+								for part, texId in pairs(textureBackups) do
+										pcall(function() part.TextureID = texId end)
+								end
+								textureBackups = {}
+						end
+						return
+				end
+				backupLighting()
+				Lighting.GlobalShadows = false
+				local scan = function()
+						local count = 0
+						for _, obj in ipairs(Workspace:GetDescendants()) do
+								if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
+										if particleBackups[obj] == nil then
+												particleBackups[obj] = obj.Enabled
+												obj.Enabled = false
+												count += 1
+										end
+								elseif level == "full" and obj:IsA("MeshPart") and obj.TextureID ~= "" then
+										if textureBackups[obj] == nil then
+												textureBackups[obj] = obj.TextureID
+												obj.TextureID = ""
+												count += 1
+										end
+								end
+								if count > 800 then
+										break
+								end
+						end
+				end
+				local ok, err = pcall(scan)
+				if not ok then
+						Logger.warn("fps boost scan failed: " .. tostring(err))
+				end
+				conn = Workspace.DescendantAdded:Connect(function(obj)
+						task.defer(function()
+								if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
+										particleBackups[obj] = obj.Enabled
+										obj.Enabled = false
+								end
+						end)
+				end)
+				Tracker.track(conn, "fpsboost")
+		end
 
-        function SettingsController.setFpsBoost(level)
-                fpsBoostLevel = level
-                Tracker.cleanup("fpsboost")
-                applyFpsBoost(level)
-                if level ~= "off" then
-                        Logger.info("fps boost applied: " .. level)
-                end
-        end
+		function SettingsController.setFpsBoost(level)
+				fpsBoostLevel = level
+				Tracker.cleanup("fpsboost")
+				applyFpsBoost(level)
+				if level ~= "off" then
+						Logger.info("fps boost applied: " .. level)
+				end
+		end
 
-        function SettingsController.getFpsBoostLevel()
-                return fpsBoostLevel
-        end
+		function SettingsController.getFpsBoostLevel()
+				return fpsBoostLevel
+		end
 
-        local fpsValue = 0
+		local fpsValue = 0
 
-        function SettingsController.startFpsCounter()
-                local frames = 0
-                Tracker.setRunning("fpscounter", true)
-                local conn = RunService.RenderStepped:Connect(function()
-                        frames += 1
-                end)
-                Tracker.track(conn, "fpscounter")
-                task.spawn(function()
-                        while Tracker.isRunning("fpscounter") do
-                                task.wait(1)
-                                fpsValue = frames
-                                frames = 0
-                        end
-                end)
-        end
+		function SettingsController.startFpsCounter()
+				local frames = 0
+				Tracker.setRunning("fpscounter", true)
+				local conn = RunService.RenderStepped:Connect(function()
+						frames += 1
+				end)
+				Tracker.track(conn, "fpscounter")
+				task.spawn(function()
+						while Tracker.isRunning("fpscounter") do
+								task.wait(1)
+								fpsValue = frames
+								frames = 0
+						end
+				end)
+		end
 
-        function SettingsController.getFps()
-                return fpsValue
-        end
+		function SettingsController.getFps()
+				return fpsValue
+		end
 
-        function SettingsController.copyLogs()
-                local ok = Util.setClipboard(Logger.getHistory())
-                Util.notify("Debug", ok and "Logs copied to clipboard" or "Clipboard not supported")
-        end
+		function SettingsController.copyLogs()
+				local ok = Util.setClipboard(Logger.getHistory())
+				Util.notify("Debug", ok and "Logs copied to clipboard" or "Clipboard not supported")
+		end
 
-        function SettingsController.clearLogs()
-                Logger.clear()
-                Util.notify("Debug", "Logs cleared")
-        end
+		function SettingsController.clearLogs()
+				Logger.clear()
+				Util.notify("Debug", "Logs cleared")
+		end
 
-        function SettingsController.checkUpdate()
-                Util.notify("Update", "Checking for updates...")
-                local body = Util.httpGet(EXECUTE_URL)
-                if not body then
-                        Util.notify("Update", "Could not reach the source")
-                        return
-                end
-                local remoteVersion = body:match('local VERSION = "(.-)"')
-                if not remoteVersion then
-                        Util.notify("Update", "Could not read remote version")
-                        return
-                end
-                if remoteVersion == VERSION then
-                        Util.notify("Update", "You are up to date (" .. VERSION .. ")")
-                else
-                        Util.notify("Update", "Update available: " .. remoteVersion .. " (current: " .. VERSION .. ")", 6)
-                end
-        end
+		function SettingsController.checkUpdate()
+				Util.notify("Update", "Checking for updates...")
+				local body = Util.httpGet(EXECUTE_URL)
+				if not body then
+						Util.notify("Update", "Could not reach the source")
+						return
+				end
+				local remoteVersion = body:match('local VERSION = "(.-)"')
+				if not remoteVersion then
+						Util.notify("Update", "Could not read remote version")
+						return
+				end
+				if remoteVersion == VERSION then
+						Util.notify("Update", "You are up to date (" .. VERSION .. ")")
+				else
+						Util.notify("Update", "Update available: " .. remoteVersion .. " (current: " .. VERSION .. ")", 6)
+				end
+		end
 
-        function SettingsController.copySource()
-                local ok = Util.setClipboard(EXECUTE_URL)
-                Util.notify("Project", ok and "Execute URL copied" or "Clipboard not supported")
-        end
+		function SettingsController.copySource()
+				local ok = Util.setClipboard(EXECUTE_URL)
+				Util.notify("Project", ok and "Execute URL copied" or "Clipboard not supported")
+		end
 
-        function SettingsController.resetConfig()
-                local ok = false
-                if isfolder and delfile then
-                        pcall(function()
-                                makefolder("PS2Hub")
-                                delfile("PS2Hub/Config.rbxl")
-                                ok = true
-                        end)
-                end
-                Util.notify("Config", ok and "Saved config removed. Rejoin to see defaults." or "File API not supported on this executor")
-        end
+		function SettingsController.resetConfig()
+				local ok = false
+				if isfolder and delfile then
+						pcall(function()
+								makefolder("PS2Hub")
+								delfile("PS2Hub/Config.rbxl")
+								ok = true
+						end)
+				end
+				Util.notify("Config", ok and "Saved config removed. Rejoin to see defaults." or "File API not supported on this executor")
+		end
 
-        function SettingsController.destroyUi()
-                Util.notify("PS2 Hub", "Shutting down...")
-                ESPController.stopAll()
-                Tracker.cleanupAll()
-                local Rayfield = _G.RayfieldInstance
-                if Rayfield then
-                        pcall(function()
-                                Rayfield:Destroy()
-                        end)
-                end
-        end
+		function SettingsController.destroyUi()
+				Util.notify("PS2 Hub", "Shutting down...")
+				ESPController.stopAll()
+				Tracker.cleanupAll()
+				local Rayfield = _G.RayfieldInstance
+				if Rayfield then
+						pcall(function()
+								Rayfield:Destroy()
+						end)
+				end
+				getgenv().PS2Hub_Loaded = nil
+		end
+
+		function SettingsController.reloadScript()
+				Util.notify("PS2 Hub", "Reloading...")
+				task.wait(0.3)
+				ESPController.stopAll()
+				Tracker.cleanupAll()
+				local Rayfield = _G.RayfieldInstance
+				if Rayfield then
+						pcall(function()
+								Rayfield:Destroy()
+						end)
+				end
+				getgenv().PS2Hub_Loaded = nil
+				local ok, exec = pcall(function()
+						return loadstring(game:HttpGet(EXECUTE_URL))
+				end)
+				if ok and exec then
+						task.spawn(exec)
+				else
+						print("[PS2 Hub] reload failed, could not fetch source")
+				end
+		end
 end
 
 if getgenv().PS2Hub_Loaded then
@@ -1960,9 +2223,22 @@ pcall(function()
 	end
 end)
 
-local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+local Rayfield = nil
+do
+	local attempts = 0
+	while not Rayfield and attempts < 3 do
+		attempts += 1
+		local ok, result = pcall(function()
+			return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+		end)
+		if ok and type(result) == "table" then
+			Rayfield = result
+		end
+	end
+end
 if not Rayfield then
-	error("[PS2 Hub] failed to load Rayfield UI")
+	print("[PS2 Hub] failed to load Rayfield UI after 3 attempts. Check your connection or executor HttpGet support.")
+	return
 end
 _G.RayfieldInstance = Rayfield
 
@@ -2020,6 +2296,10 @@ do
 		if Tracker.isRunning("antiafk") then activeModules += 1 end
 		if Tracker.isRunning("sprint") then activeModules += 1 end
 		if Tracker.isRunning("npcscan") then activeModules += 1 end
+		if Tracker.isRunning("espplayers") then activeModules += 1 end
+		if Tracker.isRunning("lockstats") then activeModules += 1 end
+		if Tracker.isRunning("follow") then activeModules += 1 end
+		if Tracker.isRunning("clicktp") then activeModules += 1 end
 		return activeModules
 	end
 	Tracker.setRunning("homerefresh", true)
@@ -2110,12 +2390,29 @@ do
 			MovementController.setFlySpeed(value)
 		end,
 	})
+	UniversalTab:CreateDropdown({
+		Name = "Fly Method",
+		Options = { "WASD", "Camera (mobile)" },
+		CurrentOption = { "WASD" },
+		Flag = "UniversalFlyMethod",
+		Callback = function(option)
+			MovementController.setFlyMethod(normalizeChoice(option))
+		end,
+	})
 	UniversalTab:CreateToggle({
 		Name = "Noclip",
 		CurrentValue = false,
 		Flag = "UniversalNoclip",
 		Callback = function(value)
 			MovementController.setNoclip(value)
+		end,
+	})
+	UniversalTab:CreateToggle({
+		Name = "Click Teleport",
+		CurrentValue = false,
+		Flag = "UniversalClickTp",
+		Callback = function(value)
+			MovementController.setClickTp(value)
 		end,
 	})
 	UniversalTab:CreateToggle({
@@ -2171,7 +2468,7 @@ do
 	})
 	UniversalTab:CreateToggle({
 		Name = "Anti-AFK",
-		CurrentValue = true,
+		CurrentValue = false,
 		Flag = "UniversalAntiAFK",
 		Callback = function(value)
 			CharacterController.setAntiAFK(value)
@@ -2203,6 +2500,15 @@ do
 		Name = "Teleport to Player",
 		Callback = function()
 			PlayerController.teleportToSelected()
+		end,
+	})
+
+	UniversalTab:CreateToggle({
+		Name = "Follow Selected Player",
+		CurrentValue = false,
+		Flag = "UniversalFollow",
+		Callback = function(value)
+			PlayerController.setFollow(value)
 		end,
 	})
 	UniversalTab:CreateButton({
@@ -2463,6 +2769,14 @@ do
 		end,
 	})
 	EspTab:CreateToggle({
+		Name = "Health Bars",
+		CurrentValue = true,
+		Flag = "EspHealthBars",
+		Callback = function(value)
+			ESPController.setHealthBars(value)
+		end,
+	})
+	EspTab:CreateToggle({
 		Name = "Team Colors",
 		CurrentValue = false,
 		Flag = "EspTeamColor",
@@ -2636,6 +2950,12 @@ do
 		Name = "Copy Execute URL",
 		Callback = function()
 			SettingsController.copySource()
+		end,
+	})
+	SettingsTab:CreateButton({
+		Name = "Reload Script",
+		Callback = function()
+			SettingsController.reloadScript()
 		end,
 	})
 	SettingsTab:CreateButton({
