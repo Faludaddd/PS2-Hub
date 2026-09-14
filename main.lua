@@ -1,13 +1,13 @@
-local VERSION = "2.1.0"
+local VERSION = "2.2.0"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
 local Services = {}
 local function GetService(name)
-	if not Services[name] then
-		Services[name] = game:GetService(name)
-	end
-	return Services[name]
+        if not Services[name] then
+                Services[name] = game:GetService(name)
+        end
+        return Services[name]
 end
 
 local Players = GetService("Players")
@@ -24,437 +24,458 @@ local LocalPlayer = Players.LocalPlayer
 
 local Logger = {}
 do
-	local levels = { info = 0, warn = 1, error = 2 }
-	Logger.history = {}
-	Logger.minLevel = 0
+        local levels = { info = 0, warn = 1, error = 2 }
+        Logger.history = {}
+        Logger.minLevel = 0
+        local onLog = nil
 
-	local function push(level, msg)
-		local entry = "[" .. os.date("%H:%M:%S") .. "] [" .. string.upper(level) .. "] " .. tostring(msg)
-		table.insert(Logger.history, entry)
-		if #Logger.history > 300 then
-			table.remove(Logger.history, 1)
-		end
-		if levels[level] >= Logger.minLevel then
-			print("[PS2 Hub] " .. entry)
-		end
-	end
+        local function push(level, msg)
+                local entry = "[" .. os.date("%H:%M:%S") .. "] [" .. string.upper(level) .. "] " .. tostring(msg)
+                table.insert(Logger.history, entry)
+                if #Logger.history > 300 then
+                        table.remove(Logger.history, 1)
+                end
+                if levels[level] >= Logger.minLevel then
+                        print("[PS2 Hub] " .. entry)
+                end
+                if onLog then
+                        pcall(onLog, entry)
+                end
+        end
 
-	function Logger.info(msg) push("info", msg) end
-	function Logger.warn(msg) push("warn", msg) end
-	function Logger.error(msg) push("error", msg) end
-	function Logger.getHistory()
-		return table.concat(Logger.history, "\n")
-	end
-	function Logger.clear()
-		Logger.history = {}
-	end
+        function Logger.setOnLog(fn)
+                onLog = fn
+        end
+
+        function Logger.info(msg) push("info", msg) end
+        function Logger.warn(msg) push("warn", msg) end
+        function Logger.error(msg) push("error", msg) end
+        function Logger.getHistory()
+                return table.concat(Logger.history, "\n")
+        end
+        function Logger.clear()
+                Logger.history = {}
+        end
 end
 
 local State = {}
 do
-	local store = {}
+        local store = {}
 
-	function State.get(key, default)
-		if store[key] == nil then
-			return default
-		end
-		return store[key]
-	end
+        function State.get(key, default)
+                if store[key] == nil then
+                        return default
+                end
+                return store[key]
+        end
 
-	function State.set(key, value)
-		store[key] = value
-		return value
-	end
+        function State.set(key, value)
+                store[key] = value
+                return value
+        end
 
-	function State.toggle(key)
-		local v = not store[key]
-		store[key] = v
-		return v
-	end
+        function State.toggle(key)
+                local v = not store[key]
+                store[key] = v
+                return v
+        end
 end
 
 local Tracker = {}
 do
-	local connections = {}
-	local instances = {}
-	local running = {}
+        local connections = {}
+        local instances = {}
+        local running = {}
 
-	function Tracker.track(conn, label)
-		if conn and typeof(conn) == "RBXScriptConnection" then
-			table.insert(connections, { conn = conn, label = label or "" })
-		end
-		return conn
-	end
+        function Tracker.track(conn, label)
+                if conn and typeof(conn) == "RBXScriptConnection" then
+                        table.insert(connections, { conn = conn, label = label or "" })
+                end
+                return conn
+        end
 
-	function Tracker.trackInstance(inst, label)
-		if inst then
-			table.insert(instances, { inst = inst, label = label or "" })
-		end
-		return inst
-	end
+        function Tracker.trackInstance(inst, label)
+                if inst then
+                        table.insert(instances, { inst = inst, label = label or "" })
+                end
+                return inst
+        end
 
-	function Tracker.setRunning(name, value)
-		running[name] = value and true or nil
-	end
+        function Tracker.setRunning(name, value)
+                running[name] = value and true or nil
+        end
 
-	function Tracker.isRunning(name)
-		return running[name] == true
-	end
+        function Tracker.isRunning(name)
+                return running[name] == true
+        end
 
-	function Tracker.cleanup(prefix)
-		local removed = 0
-		for i = #connections, 1, -1 do
-			local entry = connections[i]
-			if not prefix or entry.label == prefix or entry.label:sub(1, #prefix) == prefix then
-				pcall(function() entry.conn:Disconnect() end)
-				table.remove(connections, i)
-				removed += 1
-			end
-		end
-		for i = #instances, 1, -1 do
-			local entry = instances[i]
-			local instName = ""
-			pcall(function() instName = entry.inst.Name end)
-			if not prefix or entry.label == prefix or entry.label:sub(1, #prefix) == prefix or instName:sub(1, #prefix) == prefix then
-				pcall(function() entry.inst:Destroy() end)
-				table.remove(instances, i)
-				removed += 1
-			end
-		end
-		return removed
-	end
+        function Tracker.cleanup(prefix)
+                local removed = 0
+                for i = #connections, 1, -1 do
+                        local entry = connections[i]
+                        if not prefix or entry.label == prefix or entry.label:sub(1, #prefix) == prefix then
+                                pcall(function() entry.conn:Disconnect() end)
+                                table.remove(connections, i)
+                                removed += 1
+                        end
+                end
+                for i = #instances, 1, -1 do
+                        local entry = instances[i]
+                        local instName = ""
+                        pcall(function() instName = entry.inst.Name end)
+                        if not prefix or entry.label == prefix or entry.label:sub(1, #prefix) == prefix or instName:sub(1, #prefix) == prefix then
+                                pcall(function() entry.inst:Destroy() end)
+                                table.remove(instances, i)
+                                removed += 1
+                        end
+                end
+                return removed
+        end
 
-	function Tracker.cleanupAll()
-		local removed = Tracker.cleanup()
-		for k in pairs(running) do
-			running[k] = nil
-		end
-		Logger.info("Tracker cleaned " .. removed .. " resources")
-	end
+        function Tracker.cleanupAll()
+                local removed = Tracker.cleanup()
+                for k in pairs(running) do
+                        running[k] = nil
+                end
+                Logger.info("Tracker cleaned " .. removed .. " resources")
+        end
 
-	getgenv().PS2Hub_TrackerCleanup = Tracker.cleanupAll
+        getgenv().PS2Hub_TrackerCleanup = Tracker.cleanupAll
 end
 
 
 local Signal = {}
 do
-	Signal.__index = Signal
+        Signal.__index = Signal
 
-	function Signal.new()
-		return setmetatable({ handlers = {} }, Signal)
-	end
+        function Signal.new()
+                return setmetatable({ handlers = {} }, Signal)
+        end
 
-	function Signal:Connect(fn)
-		local handler = { fn = fn, connected = true }
-		table.insert(self.handlers, handler)
-		return {
-			Disconnect = function()
-				handler.connected = false
-				for i, h in ipairs(self.handlers) do
-					if h == handler then
-						table.remove(self.handlers, i)
-						break
-					end
-				end
-			end,
-		}
-	end
+        function Signal:Connect(fn)
+                local handler = { fn = fn, connected = true }
+                table.insert(self.handlers, handler)
+                return {
+                        Disconnect = function()
+                                handler.connected = false
+                                for i, h in ipairs(self.handlers) do
+                                        if h == handler then
+                                                table.remove(self.handlers, i)
+                                                break
+                                        end
+                                end
+                        end,
+                }
+        end
 
-	function Signal:Fire(...)
-		for _, handler in ipairs(self.handlers) do
-			if handler.connected then
-				task.spawn(handler.fn, ...)
-			end
-		end
-	end
+        function Signal:Fire(...)
+                for _, handler in ipairs(self.handlers) do
+                        if handler.connected then
+                                task.spawn(handler.fn, ...)
+                        end
+                end
+        end
 end
 
 local Util = {}
 do
-	function Util.safe(fn, ...)
-		local ok, err = pcall(fn, ...)
-		if not ok then
-			Logger.warn("safe call failed: " .. tostring(err))
-		end
-		return ok, err
-	end
+        function Util.safe(fn, ...)
+                local ok, err = pcall(fn, ...)
+                if not ok then
+                        Logger.warn("safe call failed: " .. tostring(err))
+                end
+                return ok, err
+        end
 
-	function Util.round(n, decimals)
-		local mult = 10 ^ (decimals or 0)
-		return math.floor(n * mult + 0.5) / mult
-	end
+        function Util.round(n, decimals)
+                local mult = 10 ^ (decimals or 0)
+                return math.floor(n * mult + 0.5) / mult
+        end
 
-	function Util.formatNumber(n)
-		local formatted = tostring(math.floor(n))
-		while true do
-			local k
-			formatted, k = formatted:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
-			if k == 0 then break end
-		end
-		return formatted
-	end
+        function Util.formatNumber(n)
+                local formatted = tostring(math.floor(n))
+                while true do
+                        local k
+                        formatted, k = formatted:gsub("^(-?%d+)(%d%d%d)", "%1,%2")
+                        if k == 0 then break end
+                end
+                return formatted
+        end
 
-	function Util.getCharacter(player)
-		player = player or LocalPlayer
-		return player and player.Character
-	end
+        function Util.getCharacter(player)
+                player = player or LocalPlayer
+                return player and player.Character
+        end
 
-	function Util.getHumanoid(player)
-		local char = Util.getCharacter(player)
-		return char and char:FindFirstChildOfClass("Humanoid")
-	end
+        function Util.getHumanoid(player)
+                local char = Util.getCharacter(player)
+                return char and char:FindFirstChildOfClass("Humanoid")
+        end
 
-	function Util.getRoot(player)
-		local char = Util.getCharacter(player)
-		return char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
-	end
+        function Util.getRoot(player)
+                local char = Util.getCharacter(player)
+                return char and (char:FindFirstChild("HumanoidRootPart") or char.PrimaryPart)
+        end
 
-	function Util.getBackpack(player)
-		player = player or LocalPlayer
-		if not player then return nil end
-		return player:FindFirstChildOfClass("Backpack")
-	end
+        function Util.getBackpack(player)
+                player = player or LocalPlayer
+                if not player then return nil end
+                return player:FindFirstChildOfClass("Backpack")
+        end
 
-	function Util.getEquippedTool(player)
-		local humanoid = Util.getHumanoid(player)
-		return humanoid and humanoid:FindFirstChildOfClass("Tool")
-	end
+        function Util.getEquippedTool(player)
+                local humanoid = Util.getHumanoid(player)
+                return humanoid and humanoid:FindFirstChildOfClass("Tool")
+        end
 
-	function Util.getTools(player)
-		local list = {}
-		local humanoid = Util.getHumanoid(player)
-		if humanoid then
-			for _, t in ipairs(humanoid:GetChildren()) do
-				if t:IsA("Tool") then table.insert(list, t) end
-			end
-		end
-		local backpack = Util.getBackpack(player)
-		if backpack then
-			for _, t in ipairs(backpack:GetChildren()) do
-				if t:IsA("Tool") then table.insert(list, t) end
-			end
-		end
-		return list
-	end
+        function Util.getTools(player)
+                local list = {}
+                local humanoid = Util.getHumanoid(player)
+                if humanoid then
+                        for _, t in ipairs(humanoid:GetChildren()) do
+                                if t:IsA("Tool") then table.insert(list, t) end
+                        end
+                end
+                local backpack = Util.getBackpack(player)
+                if backpack then
+                        for _, t in ipairs(backpack:GetChildren()) do
+                                if t:IsA("Tool") then table.insert(list, t) end
+                        end
+                end
+                return list
+        end
 
-	function Util.getCharacterParts(player)
-		local parts = {}
-		local char = Util.getCharacter(player)
-		if char then
-			for _, p in ipairs(char:GetDescendants()) do
-				if p:IsA("BasePart") then table.insert(parts, p) end
-			end
-		end
-		return parts
-	end
+        function Util.getCharacterParts(player)
+                local parts = {}
+                local char = Util.getCharacter(player)
+                if char then
+                        for _, p in ipairs(char:GetDescendants()) do
+                                if p:IsA("BasePart") then table.insert(parts, p) end
+                        end
+                end
+                return parts
+        end
 
-	function Util.distanceTo(part)
-		local root = Util.getRoot()
-		if root and part then
-			return (root.Position - part.Position).Magnitude
-		end
-		return math.huge
-	end
+        function Util.distanceTo(part)
+                local root = Util.getRoot()
+                if root and part then
+                        return (root.Position - part.Position).Magnitude
+                end
+                return math.huge
+        end
 
-	function Util.isAlive(player)
-		local humanoid = Util.getHumanoid(player)
-		return humanoid and humanoid.Health > 0
-	end
+        function Util.isAlive(player)
+                local humanoid = Util.getHumanoid(player)
+                return humanoid and humanoid.Health > 0
+        end
 
-	function Util.request(opts)
-		local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or (request)
-		if not req then
-			return nil
-		end
-		local ok, result = pcall(req, opts)
-		if ok then return result end
-		return nil
-	end
+        function Util.request(opts)
+                local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or (request)
+                if not req then
+                        return nil
+                end
+                local ok, result = pcall(req, opts)
+                if ok then return result end
+                return nil
+        end
 
-	function Util.httpGet(url)
-		local ok, result = pcall(function() return game:HttpGet(url) end)
-		if ok then return result end
-		local resp = Util.request({ Url = url, Method = "GET" })
-		if resp and resp.Body then return resp.Body end
-		return nil
-	end
+        function Util.httpGet(url)
+                local ok, result = pcall(function() return game:HttpGet(url) end)
+                if ok then return result end
+                local resp = Util.request({ Url = url, Method = "GET" })
+                if resp and resp.Body then return resp.Body end
+                return nil
+        end
 
-	function Util.jsonDecode(text)
-		if not text then return nil end
-		local ok, data = pcall(HttpService.JSONDecode, HttpService, text)
-		if ok then return data end
-		return nil
-	end
+        function Util.jsonDecode(text)
+                if not text then return nil end
+                local ok, data = pcall(HttpService.JSONDecode, HttpService, text)
+                if ok then return data end
+                return nil
+        end
 
-	function Util.jsonEncode(data)
-		local ok, text = pcall(HttpService.JSONEncode, HttpService, data)
-		if ok then return text end
-		return nil
-	end
+        function Util.jsonEncode(data)
+                local ok, text = pcall(HttpService.JSONEncode, HttpService, data)
+                if ok then return text end
+                return nil
+        end
 
-	function Util.setClipboard(text)
-		local setCb = setclipboard or toclipboard or set_clipboard
-		if setCb then
-			pcall(setCb, text)
-			return true
-		end
-		return false
-	end
+        function Util.setClipboard(text)
+                local setCb = setclipboard or toclipboard or set_clipboard
+                if setCb then
+                        pcall(setCb, text)
+                        return true
+                end
+                return false
+        end
 
-	function Util.getPing()
-		local ok, ping = pcall(function()
-			return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
-		end)
-		if ok and ping then
-			return Util.round(ping, 0)
-		end
-		return -1
-	end
+        function Util.getPing()
+                local ok, ping = pcall(function()
+                        return Stats.Network.ServerStatsItem["Data Ping"]:GetValue()
+                end)
+                if ok and ping then
+                        return Util.round(ping, 0)
+                end
+                return -1
+        end
 
-	function Util.notify(title, content, duration)
-		if State.get("notifications") == false then return end
-		local Rayfield = _G.RayfieldInstance
-		if Rayfield and Rayfield.Notify then
-			pcall(Rayfield.Notify, Rayfield, {
-				Title = title or "PS2 Hub",
-				Content = content or "",
-				Duration = duration or 3,
-			})
-		end
-	end
+        function Util.notify(title, content, duration)
+                if State.get("notifications") == false then return end
+                local window = _G.RayfieldInstance
+                if window and window.Notify then
+                        pcall(function()
+                                window:Notify({
+                                        title = title or "PS2 Hub",
+                                        content = content or "",
+                                        duration = duration or 3,
+                                })
+                        end)
+                end
+        end
 
-	function Util.copyTable(t)
-		local copy = {}
-		for k, v in pairs(t) do
-			if type(v) == "table" then
-				copy[k] = Util.copyTable(v)
-			else
-				copy[k] = v
-			end
-		end
-		return copy
-	end
+        function Util.copyTable(t)
+                local copy = {}
+                for k, v in pairs(t) do
+                        if type(v) == "table" then
+                                copy[k] = Util.copyTable(v)
+                        else
+                                copy[k] = v
+                        end
+                end
+                return copy
+        end
 end
 
 local GameProfile = {}
 do
-		GameProfile.gameName = "Project Slayers 2"
-		GameProfile.targetPlaceIds = {}
-		GameProfile.ready = false
-		GameProfile.status = "PENDING_RELEASE"
-		GameProfile.lockReason = "Project Slayers 2 is not released yet. Game-specific features stay locked until the instance data is provided."
+                local onLoadHandlers = {}
 
-		GameProfile.data = {
-				npcs = {},
-				teleportPoints = {},
-				quests = {},
-				remotes = {},
-				mobs = {},
-				clans = {
-						menuGui = "",
-						rerollButton = "",
-						rerollRemote = "",
-						clanLabel = "",
-						clanList = {},
-				},
-				stats = {},
-		}
+                function GameProfile.onLoad(fn)
+                        if type(fn) == "function" then
+                                table.insert(onLoadHandlers, fn)
+                        end
+                end
 
-		function GameProfile.load(profileData)
-				if type(profileData) ~= "table" then
-						Logger.warn("GameProfile.load expects a table")
-						return false
-				end
-				for key, value in pairs(profileData) do
-						GameProfile.data[key] = value
-				end
-				if profileData.placeIds then
-						GameProfile.targetPlaceIds = profileData.placeIds
-				end
-				GameProfile.ready = true
-				GameProfile.status = "ACTIVE"
-				GameProfile.lockReason = ""
-				Logger.info("GameProfile loaded: " .. tostring(profileData.name or "unnamed"))
-				return true
-		end
+                GameProfile.gameName = "Project Slayers 2"
+                GameProfile.targetPlaceIds = {}
+                GameProfile.ready = false
+                GameProfile.status = "PENDING_RELEASE"
+                GameProfile.lockReason = "Project Slayers 2 is not released yet. Game-specific features stay locked until the instance data is provided."
 
-		function GameProfile.get(path)
-				local node = GameProfile.data
-				for segment in string.gmatch(path, "[^.]+") do
-						if type(node) ~= "table" then
-								return nil
-						end
-						node = node[segment]
-				end
-				return node
-		end
+                GameProfile.data = {
+                                npcs = {},
+                                teleportPoints = {},
+                                quests = {},
+                                remotes = {},
+                                mobs = {},
+                                clans = {
+                                                menuGui = "",
+                                                rerollButton = "",
+                                                rerollRemote = "",
+                                                clanLabel = "",
+                                                clanList = {},
+                                },
+                                stats = {},
+                }
 
-		function GameProfile.resolvePath(path)
-				if not path or path == "" then
-						return nil
-				end
-				local node = game
-				for segment in string.gmatch(path, "[^./]+") do
-						if node == nil then
-								return nil
-						end
-						node = node:FindFirstChild(segment)
-				end
-				return node
-		end
+                function GameProfile.load(profileData)
+                                if type(profileData) ~= "table" then
+                                                Logger.warn("GameProfile.load expects a table")
+                                                return false
+                                end
+                                for key, value in pairs(profileData) do
+                                                GameProfile.data[key] = value
+                                end
+                                if profileData.placeIds then
+                                                GameProfile.targetPlaceIds = profileData.placeIds
+                                end
+                                GameProfile.ready = true
+                                GameProfile.status = "ACTIVE"
+                                GameProfile.lockReason = ""
+                                Logger.info("GameProfile loaded: " .. tostring(profileData.name or "unnamed"))
+                                for _, fn in ipairs(onLoadHandlers) do
+                                        pcall(fn)
+                                end
+                                return true
+                end
+
+                function GameProfile.get(path)
+                                local node = GameProfile.data
+                                for segment in string.gmatch(path, "[^.]+") do
+                                                if type(node) ~= "table" then
+                                                                return nil
+                                                end
+                                                node = node[segment]
+                                end
+                                return node
+                end
+
+                function GameProfile.resolvePath(path)
+                                if not path or path == "" then
+                                                return nil
+                                end
+                                local node = game
+                                for segment in string.gmatch(path, "[^./]+") do
+                                                if node == nil then
+                                                                return nil
+                                                end
+                                                node = node:FindFirstChild(segment)
+                                end
+                                return node
+                end
 end
 
 local GameDetector = {}
 do
-		local detected = nil
+                local detected = nil
 
-		function GameDetector.detect()
-				if detected then return detected end
-				local placeId = game.PlaceId
-				local jobId = game.JobId
-				local matched = nil
-				for _, id in ipairs(GameProfile.targetPlaceIds) do
-						if id == placeId then
-								matched = true
-								break
-						end
-				end
-				detected = {
-						placeId = placeId,
-						jobId = jobId,
-						gameName = (placeId > 0 and game.Name) or "Unknown",
-						creator = (placeId > 0 and game.Creator.Name) or "",
-						inPS2 = matched == true,
-						supported = GameProfile.ready and matched == true,
-				}
-				return detected
-		end
+                function GameDetector.detect()
+                                if detected then return detected end
+                                local placeId = game.PlaceId
+                                local jobId = game.JobId
+                                local matched = nil
+                                for _, id in ipairs(GameProfile.targetPlaceIds) do
+                                                if id == placeId then
+                                                                matched = true
+                                                                break
+                                                end
+                                end
+                                detected = {
+                                                placeId = placeId,
+                                                jobId = jobId,
+                                                gameName = (placeId > 0 and game.Name) or "Unknown",
+                                                creator = (placeId > 0 and game.Creator.Name) or "",
+                                                inPS2 = matched == true,
+                                                supported = GameProfile.ready and matched == true,
+                                }
+                                return detected
+                end
 
-		function GameDetector.getStatusText()
-				local info = GameDetector.detect()
-				if info.supported then
-						return "Supported"
-				end
-				if not GameProfile.ready then
-						return "Awaiting release"
-				end
-				return "Wrong game"
-		end
+                function GameDetector.getStatusText()
+                                local info = GameDetector.detect()
+                                if info.supported then
+                                                return "Supported"
+                                end
+                                if not GameProfile.ready then
+                                                return "Awaiting release"
+                                end
+                                return "Wrong game"
+                end
 
-		function GameDetector.isGameReady()
-				local info = GameDetector.detect()
-				return info.supported
-		end
+                function GameDetector.isGameReady()
+                                local info = GameDetector.detect()
+                                return info.supported
+                end
 
-		function GameDetector.requireGame(featureName)
-				if GameDetector.isGameReady() then
-						return true
-				end
-				local status = GameDetector.getStatusText()
-				Util.notify(featureName or "Feature", "Locked - " .. status .. ". " .. GameProfile.lockReason, 5)
-				Logger.warn((featureName or "feature") .. " blocked: " .. status)
-				return false
-		end
+                function GameDetector.requireGame(featureName)
+                                if GameDetector.isGameReady() then
+                                                return true
+                                end
+                                local status = GameDetector.getStatusText()
+                                Util.notify(featureName or "Feature", "Locked - " .. status .. ". " .. GameProfile.lockReason, 5)
+                                Logger.warn((featureName or "feature") .. " blocked: " .. status)
+                                return false
+                end
 end
 
 local MovementController = {}
@@ -1987,225 +2008,236 @@ end
 
 local SettingsController = {}
 do
-		local lightingBackup = nil
-		local fpsBoostLevel = "off"
-		local particleBackups = {}
-		local textureBackups = {}
+                local lightingBackup = nil
+                local fpsBoostLevel = "off"
+                local particleBackups = {}
+                local textureBackups = {}
 
-		local function backupLighting()
-				if lightingBackup then
-						return
-				end
-				lightingBackup = {
-						Brightness = Lighting.Brightness,
-						ClockTime = Lighting.ClockTime,
-						FogEnd = Lighting.FogEnd,
-						GlobalShadows = Lighting.GlobalShadows,
-						OutdoorAmbient = Lighting.OutdoorAmbient,
-						ExposureCompensation = Lighting.ExposureCompensation,
-				}
-		end
+                local function backupLighting()
+                                if lightingBackup then
+                                                return
+                                end
+                                lightingBackup = {
+                                                Brightness = Lighting.Brightness,
+                                                ClockTime = Lighting.ClockTime,
+                                                FogEnd = Lighting.FogEnd,
+                                                GlobalShadows = Lighting.GlobalShadows,
+                                                OutdoorAmbient = Lighting.OutdoorAmbient,
+                                                ExposureCompensation = Lighting.ExposureCompensation,
+                                }
+                end
 
-		function SettingsController.setNotifications(enabled)
-				State.set("notifications", enabled and true or false)
-		end
+                function SettingsController.setNotifications(enabled)
+                                State.set("notifications", enabled and true or false)
+                end
 
-		function SettingsController.setAutoReexecute(enabled)
-				State.set("autoReexecute", enabled and true or false)
-		end
+                function SettingsController.setAutoReexecute(enabled)
+                                State.set("autoReexecute", enabled and true or false)
+                end
 
-		function SettingsController.isAutoReexecute()
-				return State.get("autoReexecute", true) ~= false
-		end
+                function SettingsController.isAutoReexecute()
+                                return State.get("autoReexecute", true) ~= false
+                end
 
-		function SettingsController.setFullbright(enabled)
-				if enabled then
-						backupLighting()
-						Lighting.Brightness = 2
-						Lighting.ClockTime = 14
-						Lighting.FogEnd = 100000
-						Lighting.GlobalShadows = false
-						Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
-				else
-						if lightingBackup then
-								Lighting.Brightness = lightingBackup.Brightness
-								Lighting.ClockTime = lightingBackup.ClockTime
-								Lighting.FogEnd = lightingBackup.FogEnd
-								Lighting.GlobalShadows = lightingBackup.GlobalShadows
-								Lighting.OutdoorAmbient = lightingBackup.OutdoorAmbient
-						end
-				end
-		end
+                function SettingsController.setFullbright(enabled)
+                                if enabled then
+                                                backupLighting()
+                                                Lighting.Brightness = 2
+                                                Lighting.ClockTime = 14
+                                                Lighting.FogEnd = 100000
+                                                Lighting.GlobalShadows = false
+                                                Lighting.OutdoorAmbient = Color3.fromRGB(178, 178, 178)
+                                else
+                                                if lightingBackup then
+                                                                Lighting.Brightness = lightingBackup.Brightness
+                                                                Lighting.ClockTime = lightingBackup.ClockTime
+                                                                Lighting.FogEnd = lightingBackup.FogEnd
+                                                                Lighting.GlobalShadows = lightingBackup.GlobalShadows
+                                                                Lighting.OutdoorAmbient = lightingBackup.OutdoorAmbient
+                                                end
+                                end
+                end
 
-		local function applyFpsBoost(level)
-				local conn
-				if level == "off" then
-						Lighting.GlobalShadows = lightingBackup and lightingBackup.GlobalShadows or true
-						for emitter, state in pairs(particleBackups) do
-								pcall(function() emitter.Enabled = state end)
-						end
-						particleBackups = {}
-						if level == "off" then
-								for part, texId in pairs(textureBackups) do
-										pcall(function() part.TextureID = texId end)
-								end
-								textureBackups = {}
-						end
-						return
-				end
-				backupLighting()
-				Lighting.GlobalShadows = false
-				local scan = function()
-						local count = 0
-						for _, obj in ipairs(Workspace:GetDescendants()) do
-								if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
-										if particleBackups[obj] == nil then
-												particleBackups[obj] = obj.Enabled
-												obj.Enabled = false
-												count += 1
-										end
-								elseif level == "full" and obj:IsA("MeshPart") and obj.TextureID ~= "" then
-										if textureBackups[obj] == nil then
-												textureBackups[obj] = obj.TextureID
-												obj.TextureID = ""
-												count += 1
-										end
-								end
-								if count > 800 then
-										break
-								end
-						end
-				end
-				local ok, err = pcall(scan)
-				if not ok then
-						Logger.warn("fps boost scan failed: " .. tostring(err))
-				end
-				conn = Workspace.DescendantAdded:Connect(function(obj)
-						task.defer(function()
-								if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
-										particleBackups[obj] = obj.Enabled
-										obj.Enabled = false
-								end
-						end)
-				end)
-				Tracker.track(conn, "fpsboost")
-		end
+                local function applyFpsBoost(level)
+                                local conn
+                                if level == "off" then
+                                                Lighting.GlobalShadows = lightingBackup and lightingBackup.GlobalShadows or true
+                                                for emitter, state in pairs(particleBackups) do
+                                                                pcall(function() emitter.Enabled = state end)
+                                                end
+                                                particleBackups = {}
+                                                if level == "off" then
+                                                                for part, texId in pairs(textureBackups) do
+                                                                                pcall(function() part.TextureID = texId end)
+                                                                end
+                                                                textureBackups = {}
+                                                end
+                                                return
+                                end
+                                backupLighting()
+                                Lighting.GlobalShadows = false
+                                local scan = function()
+                                                local count = 0
+                                                for _, obj in ipairs(Workspace:GetDescendants()) do
+                                                                if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
+                                                                                if particleBackups[obj] == nil then
+                                                                                                particleBackups[obj] = obj.Enabled
+                                                                                                obj.Enabled = false
+                                                                                                count += 1
+                                                                                end
+                                                                elseif level == "full" and obj:IsA("MeshPart") and obj.TextureID ~= "" then
+                                                                                if textureBackups[obj] == nil then
+                                                                                                textureBackups[obj] = obj.TextureID
+                                                                                                obj.TextureID = ""
+                                                                                                count += 1
+                                                                                end
+                                                                end
+                                                                if count > 800 then
+                                                                                break
+                                                                end
+                                                end
+                                end
+                                local ok, err = pcall(scan)
+                                if not ok then
+                                                Logger.warn("fps boost scan failed: " .. tostring(err))
+                                end
+                                conn = Workspace.DescendantAdded:Connect(function(obj)
+                                                task.defer(function()
+                                                                if obj:IsA("ParticleEmitter") or obj:IsA("Beam") or obj:IsA("Trail") or obj:IsA("Fire") or obj:IsA("Smoke") or obj:IsA("Sparkles") then
+                                                                                particleBackups[obj] = obj.Enabled
+                                                                                obj.Enabled = false
+                                                                end
+                                                end)
+                                end)
+                                Tracker.track(conn, "fpsboost")
+                end
 
-		function SettingsController.setFpsBoost(level)
-				fpsBoostLevel = level
-				Tracker.cleanup("fpsboost")
-				applyFpsBoost(level)
-				if level ~= "off" then
-						Logger.info("fps boost applied: " .. level)
-				end
-		end
+                function SettingsController.setFpsBoost(level)
+                                fpsBoostLevel = level
+                                Tracker.cleanup("fpsboost")
+                                applyFpsBoost(level)
+                                if level ~= "off" then
+                                                Logger.info("fps boost applied: " .. level)
+                                end
+                end
 
-		function SettingsController.getFpsBoostLevel()
-				return fpsBoostLevel
-		end
+                function SettingsController.getFpsBoostLevel()
+                                return fpsBoostLevel
+                end
 
-		local fpsValue = 0
+                local fpsValue = 0
 
-		function SettingsController.startFpsCounter()
-				local frames = 0
-				Tracker.setRunning("fpscounter", true)
-				local conn = RunService.RenderStepped:Connect(function()
-						frames += 1
-				end)
-				Tracker.track(conn, "fpscounter")
-				task.spawn(function()
-						while Tracker.isRunning("fpscounter") do
-								task.wait(1)
-								fpsValue = frames
-								frames = 0
-						end
-				end)
-		end
+                function SettingsController.startFpsCounter()
+                                local frames = 0
+                                Tracker.setRunning("fpscounter", true)
+                                local conn = RunService.RenderStepped:Connect(function()
+                                                frames += 1
+                                end)
+                                Tracker.track(conn, "fpscounter")
+                                task.spawn(function()
+                                                while Tracker.isRunning("fpscounter") do
+                                                                task.wait(1)
+                                                                fpsValue = frames
+                                                                frames = 0
+                                                end
+                                end)
+                end
 
-		function SettingsController.getFps()
-				return fpsValue
-		end
+                function SettingsController.getFps()
+                                return fpsValue
+                end
 
-		function SettingsController.copyLogs()
-				local ok = Util.setClipboard(Logger.getHistory())
-				Util.notify("Debug", ok and "Logs copied to clipboard" or "Clipboard not supported")
-		end
+                function SettingsController.copyLogs()
+                                local ok = Util.setClipboard(Logger.getHistory())
+                                Util.notify("Debug", ok and "Logs copied to clipboard" or "Clipboard not supported")
+                end
 
-		function SettingsController.clearLogs()
-				Logger.clear()
-				Util.notify("Debug", "Logs cleared")
-		end
+                function SettingsController.clearLogs()
+                                Logger.clear()
+                                Util.notify("Debug", "Logs cleared")
+                end
 
-		function SettingsController.checkUpdate()
-				Util.notify("Update", "Checking for updates...")
-				local body = Util.httpGet(EXECUTE_URL)
-				if not body then
-						Util.notify("Update", "Could not reach the source")
-						return
-				end
-				local remoteVersion = body:match('local VERSION = "(.-)"')
-				if not remoteVersion then
-						Util.notify("Update", "Could not read remote version")
-						return
-				end
-				if remoteVersion == VERSION then
-						Util.notify("Update", "You are up to date (" .. VERSION .. ")")
-				else
-						Util.notify("Update", "Update available: " .. remoteVersion .. " (current: " .. VERSION .. ")", 6)
-				end
-		end
+                function SettingsController.checkUpdate()
+                                Util.notify("Update", "Checking for updates...")
+                                local body = Util.httpGet(EXECUTE_URL)
+                                if not body then
+                                                Util.notify("Update", "Could not reach the source")
+                                                return
+                                end
+                                local remoteVersion = body:match('local VERSION = "(.-)"')
+                                if not remoteVersion then
+                                                Util.notify("Update", "Could not read remote version")
+                                                return
+                                end
+                                if remoteVersion == VERSION then
+                                                Util.notify("Update", "You are up to date (" .. VERSION .. ")")
+                                else
+                                                Util.notify("Update", "Update available: " .. remoteVersion .. " (current: " .. VERSION .. ")", 6)
+                                end
+                end
 
-		function SettingsController.copySource()
-				local ok = Util.setClipboard(EXECUTE_URL)
-				Util.notify("Project", ok and "Execute URL copied" or "Clipboard not supported")
-		end
+                function SettingsController.copySource()
+                                local ok = Util.setClipboard(EXECUTE_URL)
+                                Util.notify("Project", ok and "Execute URL copied" or "Clipboard not supported")
+                end
 
-		function SettingsController.resetConfig()
-				local ok = false
-				if isfolder and delfile then
-						pcall(function()
-								makefolder("PS2Hub")
-								delfile("PS2Hub/Config.rbxl")
-								ok = true
-						end)
-				end
-				Util.notify("Config", ok and "Saved config removed. Rejoin to see defaults." or "File API not supported on this executor")
-		end
+                function SettingsController.resetConfig()
+                                local ok = false
+                                if isfolder and delfile then
+                                                pcall(function()
+                                                                makefolder("PS2Hub")
+                                                                if isfile and isfile("PS2Hub/Config.rbxl") then
+                                                                                delfile("PS2Hub/Config.rbxl")
+                                                                end
+                                                                local window = _G.RayfieldInstance
+                                                                if window and window.GetPath then
+                                                                                local _, fullPath = window:GetPath()
+                                                                                if fullPath and fullPath ~= "" then
+                                                                                                delfile(fullPath)
+                                                                                end
+                                                                end
+                                                                ok = true
+                                                end)
+                                end
+                                Util.notify("Config", ok and "Saved config removed. Rejoin to see defaults." or "File API not supported on this executor")
+                end
 
-		function SettingsController.destroyUi()
-				Util.notify("PS2 Hub", "Shutting down...")
-				ESPController.stopAll()
-				Tracker.cleanupAll()
-				local Rayfield = _G.RayfieldInstance
-				if Rayfield then
-						pcall(function()
-								Rayfield:Destroy()
-						end)
-				end
-				getgenv().PS2Hub_Loaded = nil
-		end
+                function SettingsController.destroyUi()
+                                Util.notify("PS2 Hub", "Shutting down...")
+                                ESPController.stopAll()
+                                Tracker.cleanupAll()
+                                local window = _G.RayfieldInstance
+                                if window then
+                                                pcall(function()
+                                                                window:Unload()
+                                                end)
+                                end
+                                _G.RayfieldInstance = nil
+                                getgenv().PS2Hub_Loaded = nil
+                end
 
-		function SettingsController.reloadScript()
-				Util.notify("PS2 Hub", "Reloading...")
-				task.wait(0.3)
-				ESPController.stopAll()
-				Tracker.cleanupAll()
-				local Rayfield = _G.RayfieldInstance
-				if Rayfield then
-						pcall(function()
-								Rayfield:Destroy()
-						end)
-				end
-				getgenv().PS2Hub_Loaded = nil
-				local ok, exec = pcall(function()
-						return loadstring(game:HttpGet(EXECUTE_URL))
-				end)
-				if ok and exec then
-						task.spawn(exec)
-				else
-						print("[PS2 Hub] reload failed, could not fetch source")
-				end
-		end
+                function SettingsController.reloadScript()
+                                Util.notify("PS2 Hub", "Reloading...")
+                                task.wait(0.3)
+                                ESPController.stopAll()
+                                Tracker.cleanupAll()
+                                local window = _G.RayfieldInstance
+                                if window then
+                                                pcall(function()
+                                                                window:Unload()
+                                                end)
+                                end
+                                _G.RayfieldInstance = nil
+                                getgenv().PS2Hub_Loaded = nil
+                                local ok, exec = pcall(function()
+                                                return loadstring(game:HttpGet(EXECUTE_URL))
+                                end)
+                                if ok and exec then
+                                                task.spawn(exec)
+                                else
+                                                print("[PS2 Hub] reload failed, could not fetch source")
+                                end
+                end
 end
 
 if getgenv().PS2Hub_Loaded then
@@ -2229,32 +2261,52 @@ do
 	while not Rayfield and attempts < 3 do
 		attempts += 1
 		local ok, result = pcall(function()
-			return loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
+			return loadstring(game:HttpGet("https://sirius.menu/gen2"))()
 		end)
-		if ok and type(result) == "table" then
+		if ok and type(result) == "table" and type(result.CreateWindow) == "function" then
 			Rayfield = result
 		end
 	end
 end
 if not Rayfield then
-	print("[PS2 Hub] failed to load Rayfield UI after 3 attempts. Check your connection or executor HttpGet support.")
+	print("[PS2 Hub] failed to load Rayfield Gen 2 after 3 attempts. Check your connection or executor HttpGet support.")
 	return
 end
-_G.RayfieldInstance = Rayfield
 
 local Window = Rayfield:CreateWindow({
-	Name = "PS2 Hub",
-	LoadingTitle = "PS2 Hub " .. VERSION,
-	LoadingSubtitle = "by Faludaddd",
-	Theme = "Amber",
-	ToggleUIKeybind = Enum.KeyCode.RightControl,
-	ConfigurationSaving = {
-		Enabled = true,
-		FolderName = "PS2Hub",
-		FileName = "Config",
+	name = "PS2 Hub",
+	subtitle = "Project Slayers 2 · v" .. VERSION,
+	sidebarLayout = true,
+	profile = "by Faludaddd",
+	showName = "PS2 Hub",
+	theme = "ember",
+	configuration = {
+		autoSave = true,
+		autoLoad = true,
+		fileName = "Config",
+		customFolder = "PS2Hub",
 	},
-	KeySystem = false,
 })
+
+_G.RayfieldInstance = Window
+
+pcall(function()
+	Window:CreateTag({
+		text = "v" .. VERSION,
+		color = Color3.fromRGB(110, 120, 140),
+		order = 1,
+	})
+	local statusText = GameDetector.getStatusText()
+	local statusColor = Color3.fromRGB(235, 140, 50)
+	if statusText == "Supported" then
+		statusColor = Color3.fromRGB(70, 180, 110)
+	end
+	Window:CreateTag({
+		text = statusText,
+		color = statusColor,
+		order = 2,
+	})
+end)
 
 MovementController.init()
 PlayerController.init()
@@ -2262,13 +2314,13 @@ ToolController.init()
 ESPController.init()
 SettingsController.startFpsCounter()
 
-local HomeTab = Window:CreateTab("Home", "home")
-local UniversalTab = Window:CreateTab("Universal", "person-standing")
-local FarmTab = Window:CreateTab("Auto Farm", "swords")
-local ClanTab = Window:CreateTab("Clan", "shield")
-local EspTab = Window:CreateTab("ESP", "eye")
-local ServerTab = Window:CreateTab("Server", "server")
-local SettingsTab = Window:CreateTab("Settings", "settings")
+local HomeTab = Window:CreateTab({ name = "Home" })
+local UniversalTab = Window:CreateTab({ name = "Universal" })
+local FarmTab = Window:CreateTab({ name = "Auto Farm" })
+local ClanTab = Window:CreateTab({ name = "Clan" })
+local EspTab = Window:CreateTab({ name = "ESP" })
+local ServerTab = Window:CreateTab({ name = "Server" })
+local SettingsTab = Window:CreateTab({ name = "Settings" })
 
 local function normalizeChoice(choice)
 	if type(choice) == "table" then
@@ -2277,16 +2329,53 @@ local function normalizeChoice(choice)
 	return choice or ""
 end
 
-local HomeParagraph
+local lockedElements = {}
+
+local function lockReasonText()
+	if not GameProfile.ready then
+		return GameProfile.lockReason
+	end
+	return "Not in Project Slayers 2 - open the game to use this feature"
+end
+
+local function lockUntilRelease(element)
+	if element == nil or GameDetector.isGameReady() then
+		return
+	end
+	table.insert(lockedElements, element)
+	pcall(function()
+		element:Lock(lockReasonText())
+	end)
+end
+
+GameProfile.onLoad(function()
+	for _, element in ipairs(lockedElements) do
+		pcall(function()
+			element:Unlock()
+		end)
+	end
+	lockedElements = {}
+end)
+
+local HomeText
+local statFps, statPing, statPlayers, statModules
+
 do
-	HomeTab:CreateSection("Overview")
-	HomeParagraph = HomeTab:CreateParagraph({
-		Title = "PS2 Hub " .. VERSION,
-		Content = "Loading status...",
+	HomeTab:CreateSection({ name = "Overview" })
+	HomeText = HomeTab:CreateText({
+		name = "PS2 Hub " .. VERSION,
+		text = "Loading status...",
 	})
-	local activeModules = 0
+	local grid = HomeTab:CreateGroup()
+	local left = grid:CreateGroup({ direction = "column" })
+	local right = grid:CreateGroup({ direction = "column" })
+	statFps = left:CreateStat({ name = "FPS", value = 0 })
+	statPing = left:CreateStat({ name = "Ping", value = 0, suffix = " ms" })
+	statPlayers = right:CreateStat({ name = "Players", value = 0 })
+	statModules = right:CreateStat({ name = "Active Modules", value = 0 })
+
 	local function countActive()
-		activeModules = 0
+		local activeModules = 0
 		if Tracker.isRunning("farm") then activeModules += 1 end
 		if Tracker.isRunning("clan") then activeModules += 1 end
 		if Tracker.isRunning("fly") then activeModules += 1 end
@@ -2302,665 +2391,709 @@ do
 		if Tracker.isRunning("clicktp") then activeModules += 1 end
 		return activeModules
 	end
+
 	Tracker.setRunning("homerefresh", true)
 	task.spawn(function()
 		while Tracker.isRunning("homerefresh") do
 			task.wait(1)
-			local detector = GameDetector.detect()
 			local info = ServerController.getInfo()
-			local content = "Version: " .. VERSION
-				.. "\nGame: " .. detector.gameName
-				.. "\nGame status: " .. GameDetector.getStatusText()
+			local content = "Game: " .. GameDetector.detect().gameName
+				.. " | Status: " .. GameDetector.getStatusText()
 				.. "\nPlayer: " .. LocalPlayer.DisplayName .. " (@" .. LocalPlayer.Name .. ")"
-				.. "\nServer: " .. info.playerCount .. "/" .. info.maxPlayers
-				.. " players"
-				.. "\nFPS: " .. tostring(SettingsController.getFps())
-				.. " | Ping: " .. (info.ping >= 0 and info.ping .. "ms" or "n/a")
-				.. "\nActive modules: " .. tostring(countActive())
 			pcall(function()
-				HomeParagraph:Set({ Title = "PS2 Hub " .. VERSION, Content = content })
+				HomeText:Set(content)
+				statFps:Set(SettingsController.getFps())
+				statPing:Set(math.max(info.ping, 0))
+				statPlayers:Set(info.playerCount)
+				statModules:Set(countActive())
 			end)
 		end
 	end)
-	HomeTab:CreateSection("Game Support")
-	HomeTab:CreateParagraph({
-		Title = "Project Slayers 2",
-		Content = "Game-specific features (Auto Farm, Clan Reroll, quest automation) stay locked until the game releases and the instance data is added. Universal features work in every game.",
+
+	HomeTab:CreateSection({ name = "Game Support" })
+	HomeTab:CreateText({
+		name = "Project Slayers 2",
+		text = "Game-specific features (Auto Farm, Clan Reroll, quest automation) stay locked until the game releases and the instance data is added. Universal features work in every game.",
 	})
 	HomeTab:CreateButton({
-		Name = "Check for Updates",
-		Callback = function()
+		name = "Check for Updates",
+		callback = function()
 			SettingsController.checkUpdate()
 		end,
 	})
 end
 
 do
-	UniversalTab:CreateSection("Movement")
+	UniversalTab:CreateSection({ name = "Movement" })
 	UniversalTab:CreateSlider({
-		Name = "Walk Speed",
-		Range = { 16, 300 },
-		Increment = 1,
-		Suffix = "studs/s",
-		CurrentValue = MovementController.walkSpeed,
-		Flag = "UniversalWalkSpeed",
-		Callback = function(value)
+		name = "Walk Speed",
+		range = { 16, 300 },
+		increment = 1,
+		suffix = " studs/s",
+		value = MovementController.walkSpeed,
+		flag = "UniversalWalkSpeed",
+		callback = function(value)
 			MovementController.setWalkSpeed(value)
 		end,
 	})
 	UniversalTab:CreateSlider({
-		Name = "Jump Power",
-		Range = { 20, 300 },
-		Increment = 1,
-		Suffix = "power",
-		CurrentValue = MovementController.jumpPower,
-		Flag = "UniversalJumpPower",
-		Callback = function(value)
+		name = "Jump Power",
+		range = { 20, 300 },
+		increment = 1,
+		suffix = " power",
+		value = MovementController.jumpPower,
+		flag = "UniversalJumpPower",
+		callback = function(value)
 			MovementController.setJumpPower(value)
 		end,
 	})
 	UniversalTab:CreateToggle({
-		Name = "Lock Stats",
-		CurrentValue = false,
-		Flag = "UniversalLockStats",
-		Callback = function(value)
+		name = "Lock Stats",
+		description = "Re-applies Walk Speed and Jump Power when the game resets them",
+		value = false,
+		flag = "UniversalLockStats",
+		callback = function(value)
 			MovementController.setLockStats(value)
 		end,
 	})
 	local flyToggle
 	flyToggle = UniversalTab:CreateToggle({
-		Name = "Fly",
-		CurrentValue = false,
-		Flag = "UniversalFly",
-		Callback = function(value)
+		name = "Fly",
+		value = false,
+		flag = "UniversalFly",
+		callback = function(value)
 			local ok = MovementController.setFly(value)
-			if value and not ok then
+			if value and not ok and flyToggle then
 				flyToggle:Set(false)
 			end
 		end,
 	})
 	UniversalTab:CreateSlider({
-		Name = "Fly Speed",
-		Range = { 10, 250 },
-		Increment = 1,
-		Suffix = "studs/s",
-		CurrentValue = MovementController.flySpeed,
-		Flag = "UniversalFlySpeed",
-		Callback = function(value)
+		name = "Fly Speed",
+		range = { 10, 250 },
+		increment = 1,
+		suffix = " studs/s",
+		value = MovementController.flySpeed,
+		flag = "UniversalFlySpeed",
+		callback = function(value)
 			MovementController.setFlySpeed(value)
 		end,
 	})
 	UniversalTab:CreateDropdown({
-		Name = "Fly Method",
-		Options = { "WASD", "Camera (mobile)" },
-		CurrentOption = { "WASD" },
-		Flag = "UniversalFlyMethod",
-		Callback = function(option)
+		name = "Fly Method",
+		options = { "WASD", "Camera (mobile)" },
+		value = "WASD",
+		flag = "UniversalFlyMethod",
+		callback = function(option)
 			MovementController.setFlyMethod(normalizeChoice(option))
 		end,
 	})
 	UniversalTab:CreateToggle({
-		Name = "Noclip",
-		CurrentValue = false,
-		Flag = "UniversalNoclip",
-		Callback = function(value)
+		name = "Noclip",
+		value = false,
+		flag = "UniversalNoclip",
+		callback = function(value)
 			MovementController.setNoclip(value)
 		end,
 	})
 	UniversalTab:CreateToggle({
-		Name = "Click Teleport",
-		CurrentValue = false,
-		Flag = "UniversalClickTp",
-		Callback = function(value)
+		name = "Click Teleport",
+		description = "Click anywhere to teleport there while enabled",
+		value = false,
+		flag = "UniversalClickTp",
+		callback = function(value)
 			MovementController.setClickTp(value)
 		end,
 	})
 	UniversalTab:CreateToggle({
-		Name = "Infinite Jump",
-		CurrentValue = false,
-		Flag = "UniversalInfJump",
-		Callback = function(value)
+		name = "Infinite Jump",
+		value = false,
+		flag = "UniversalInfJump",
+		callback = function(value)
 			MovementController.setInfiniteJump(value)
 		end,
 	})
 	UniversalTab:CreateToggle({
-		Name = "Sprint (hold key)",
-		CurrentValue = false,
-		Flag = "UniversalSprint",
-		Callback = function(value)
+		name = "Sprint (hold key)",
+		description = "Hold the Sprint Key below while moving",
+		value = false,
+		flag = "UniversalSprint",
+		callback = function(value)
 			MovementController.setSprint(value)
 		end,
 	})
 	UniversalTab:CreateSlider({
-		Name = "Sprint Speed",
-		Range = { 17, 300 },
-		Increment = 1,
-		Suffix = "studs/s",
-		CurrentValue = MovementController.sprintSpeed,
-		Flag = "UniversalSprintSpeed",
-		Callback = function(value)
+		name = "Sprint Speed",
+		range = { 17, 300 },
+		increment = 1,
+		suffix = " studs/s",
+		value = MovementController.sprintSpeed,
+		flag = "UniversalSprintSpeed",
+		callback = function(value)
 			MovementController.setSprintSpeed(value)
 		end,
 	})
 	UniversalTab:CreateKeybind({
-		Name = "Sprint Key",
-		CurrentKeybind = "LeftShift",
-		HoldToInteract = false,
-		Flag = "UniversalSprintKey",
-		Callback = function(keybind)
-			local ok, keyCode = pcall(function()
-				return Enum.KeyCode[keybind]
-			end)
-			if ok and keyCode then
-				MovementController.setSprintKey(keyCode)
+		name = "Sprint Key",
+		value = MovementController.sprintKey,
+		flag = "UniversalSprintKey",
+		onChanged = function(key)
+			if typeof(key) == "EnumItem" then
+				MovementController.setSprintKey(key)
+			elseif type(key) == "string" then
+				local ok, keyCode = pcall(function()
+					return Enum.KeyCode[key]
+				end)
+				if ok and keyCode then
+					MovementController.setSprintKey(keyCode)
+				end
 			end
 		end,
 	})
 
-	UniversalTab:CreateSection("Character")
+	UniversalTab:CreateSection({ name = "Character" })
 	UniversalTab:CreateToggle({
-		Name = "God Mode",
-		CurrentValue = false,
-		Flag = "UniversalGod",
-		Callback = function(value)
+		name = "God Mode",
+		description = "Keeps your health topped up",
+		value = false,
+		flag = "UniversalGod",
+		callback = function(value)
 			CharacterController.setGod(value)
 		end,
 	})
 	UniversalTab:CreateToggle({
-		Name = "Anti-AFK",
-		CurrentValue = false,
-		Flag = "UniversalAntiAFK",
-		Callback = function(value)
+		name = "Anti-AFK",
+		description = "Blocks the idle kick",
+		value = false,
+		flag = "UniversalAntiAFK",
+		callback = function(value)
 			CharacterController.setAntiAFK(value)
 		end,
 	})
 	UniversalTab:CreateButton({
-		Name = "Reset Character",
-		Callback = function()
+		name = "Reset Character",
+		callback = function()
 			CharacterController.reset()
 		end,
 	})
 
-	UniversalTab:CreateSection("Players")
+	UniversalTab:CreateSection({ name = "Players" })
 	local playerDropdown = UniversalTab:CreateDropdown({
-		Name = "Select Player",
-		Options = PlayerController.getPlayerNames(),
-		CurrentOption = {},
-		Flag = "UniversalPlayerSelect",
-		Callback = function(option)
+		name = "Select Player",
+		options = PlayerController.getPlayerNames(),
+		placeholder = "None",
+		forgetState = true,
+		callback = function(option)
 			PlayerController.select(normalizeChoice(option))
 		end,
 	})
 	PlayerController.onRefresh(function()
 		pcall(function()
-			playerDropdown:Set(PlayerController.getPlayerNames())
+			playerDropdown:Refresh(PlayerController.getPlayerNames())
 		end)
 	end)
-	UniversalTab:CreateButton({
-		Name = "Teleport to Player",
-		Callback = function()
+	local playerRow = UniversalTab:CreateGroup()
+	playerRow:CreateButton({
+		name = "Teleport to Player",
+		callback = function()
 			PlayerController.teleportToSelected()
 		end,
 	})
-
-	UniversalTab:CreateToggle({
-		Name = "Follow Selected Player",
-		CurrentValue = false,
-		Flag = "UniversalFollow",
-		Callback = function(value)
-			PlayerController.setFollow(value)
-		end,
-	})
-	UniversalTab:CreateButton({
-		Name = "Refresh Player List",
-		Callback = function()
+	playerRow:CreateButton({
+		name = "Refresh Player List",
+		callback = function()
 			pcall(function()
-				playerDropdown:Set(PlayerController.getPlayerNames())
+				playerDropdown:Refresh(PlayerController.getPlayerNames())
 			end)
 		end,
 	})
+	UniversalTab:CreateToggle({
+		name = "Follow Selected Player",
+		value = false,
+		flag = "UniversalFollow",
+		callback = function(value)
+			PlayerController.setFollow(value)
+		end,
+	})
 
-	UniversalTab:CreateSection("Tools")
+	UniversalTab:CreateSection({ name = "Tools" })
 	local toolDropdown = UniversalTab:CreateDropdown({
-		Name = "Select Tool",
-		Options = ToolController.getToolNames(),
-		CurrentOption = {},
-		Flag = "UniversalToolSelect",
-		Callback = function(option)
+		name = "Select Tool",
+		options = ToolController.getToolNames(),
+		placeholder = "None",
+		forgetState = true,
+		callback = function(option)
 			ToolController.select(normalizeChoice(option))
 		end,
 	})
 	ToolController.onRefresh(function()
 		pcall(function()
-			toolDropdown:Set(ToolController.getToolNames())
+			toolDropdown:Refresh(ToolController.getToolNames())
 		end)
 	end)
-	UniversalTab:CreateButton({
-		Name = "Equip Selected Tool",
-		Callback = function()
+	local toolRow = UniversalTab:CreateGroup()
+	toolRow:CreateButton({
+		name = "Equip Selected Tool",
+		callback = function()
 			ToolController.equipSelected()
 		end,
 	})
-	UniversalTab:CreateButton({
-		Name = "Unequip Tool",
-		Callback = function()
+	toolRow:CreateButton({
+		name = "Unequip Tool",
+		callback = function()
 			ToolController.unequip()
 		end,
 	})
 	UniversalTab:CreateToggle({
-		Name = "Auto Re-equip on Respawn",
-		CurrentValue = false,
-		Flag = "UniversalAutoEquip",
-		Callback = function(value)
+		name = "Auto Re-equip on Respawn",
+		value = false,
+		flag = "UniversalAutoEquip",
+		callback = function(value)
 			ToolController.setAutoEquip(value)
 		end,
 	})
 end
 
 do
-	FarmTab:CreateSection("Automation")
-	FarmTab:CreateParagraph({
-		Title = "Locked",
-		Content = "Auto Farm needs Project Slayers 2 instance data (mob models, quest remotes). It unlocks automatically once the game profile is loaded after release.",
+	FarmTab:CreateSection({ name = "Automation" })
+	FarmTab:CreateText({
+		name = "Locked",
+		text = "Auto Farm needs Project Slayers 2 instance data (mob models, quest remotes). It unlocks automatically once the game profile is loaded after release.",
 	})
 	local farmToggle
 	farmToggle = FarmTab:CreateToggle({
-		Name = "Enable Auto Farm",
-		CurrentValue = false,
-		Flag = "FarmEnable",
-		Callback = function(value)
+		name = "Enable Auto Farm",
+		value = false,
+		flag = "FarmEnable",
+		callback = function(value)
 			local ok = FarmController.setEnabled(value)
-			if value and not ok then
+			if value and not ok and farmToggle then
 				farmToggle:Set(false)
 			end
 		end,
 	})
+	lockUntilRelease(farmToggle)
+	if farmToggle.value and not GameDetector.isGameReady() then
+		pcall(function()
+			farmToggle:Set(false, true)
+		end)
+	end
 	FarmTab:CreateDropdown({
-		Name = "Target Mode",
-		Options = { "Nearest", "Selected", "Lowest HP" },
-		CurrentOption = { "Nearest" },
-		Flag = "FarmMode",
-		Callback = function(option)
+		name = "Target Mode",
+		options = { "Nearest", "Selected", "Lowest HP" },
+		value = "Nearest",
+		flag = "FarmMode",
+		callback = function(option)
 			FarmController.setMode(normalizeChoice(option))
 		end,
 	})
 	local targetDropdown = FarmTab:CreateDropdown({
-		Name = "Target",
-		Options = { "None loaded" },
-		CurrentOption = { "None loaded" },
-		Flag = "FarmTarget",
-		Callback = function(option)
+		name = "Target",
+		options = {},
+		placeholder = "None loaded",
+		forgetState = true,
+		callback = function(option)
 			FarmController.setTarget(normalizeChoice(option))
 		end,
 	})
-	FarmTab:CreateButton({
-		Name = "Refresh Targets",
-		Callback = function()
+	local refreshTargetsButton = FarmTab:CreateButton({
+		name = "Refresh Targets",
+		callback = function()
 			if not GameDetector.requireGame("Auto Farm") then
 				return
 			end
 			local mobs = GameProfile.data.mobs
 			if type(mobs) == "table" and #mobs > 0 then
 				pcall(function()
-					targetDropdown:Set(mobs)
+					targetDropdown:Refresh(mobs)
 				end)
 			else
 				Util.notify("Auto Farm", "No mob data in game profile yet")
 			end
 		end,
 	})
+	lockUntilRelease(refreshTargetsButton)
 
-	FarmTab:CreateSection("Movement")
+	FarmTab:CreateSection({ name = "Movement" })
 	FarmTab:CreateDropdown({
-		Name = "Move Method",
-		Options = { "Magnitize", "Teleport" },
-		CurrentOption = { "Magnitize" },
-		Flag = "FarmMoveMethod",
-		Callback = function(option)
+		name = "Move Method",
+		options = { "Magnitize", "Teleport" },
+		value = "Magnitize",
+		flag = "FarmMoveMethod",
+		callback = function(option)
 			FarmController.setMoveMethod(normalizeChoice(option))
 		end,
 	})
 	FarmTab:CreateSlider({
-		Name = "Target Distance",
-		Range = { 2, 15 },
-		Increment = 1,
-		Suffix = "studs",
-		CurrentValue = 4,
-		Flag = "FarmDistance",
-		Callback = function(value)
+		name = "Target Distance",
+		range = { 2, 15 },
+		increment = 1,
+		suffix = " studs",
+		value = 4,
+		flag = "FarmDistance",
+		callback = function(value)
 			FarmController.setDistance(value)
 		end,
 	})
 
-	FarmTab:CreateSection("Interaction")
+	FarmTab:CreateSection({ name = "Interaction" })
 	FarmTab:CreateToggle({
-		Name = "Auto Attack",
-		CurrentValue = false,
-		Flag = "FarmAutoAttack",
-		Callback = function(value)
+		name = "Auto Attack",
+		value = false,
+		flag = "FarmAutoAttack",
+		callback = function(value)
 			FarmController.setAutoAttack(value)
 		end,
 	})
 	local autoQuestToggle
 	autoQuestToggle = FarmTab:CreateToggle({
-		Name = "Auto Quest",
-		CurrentValue = false,
-		Flag = "FarmAutoQuest",
-		Callback = function(value)
+		name = "Auto Quest",
+		value = false,
+		flag = "FarmAutoQuest",
+		callback = function(value)
 			local ok = FarmController.setAutoQuest(value)
-			if value and not ok then
+			if value and not ok and autoQuestToggle then
 				autoQuestToggle:Set(false)
 			end
 		end,
 	})
+	lockUntilRelease(autoQuestToggle)
+	if autoQuestToggle.value and not GameDetector.isGameReady() then
+		pcall(function()
+			autoQuestToggle:Set(false, true)
+		end)
+	end
 
-	FarmTab:CreateSection("Advanced")
+	FarmTab:CreateSection({ name = "Advanced" })
 	FarmTab:CreateSlider({
-		Name = "Attack Delay",
-		Range = { 0.1, 2 },
-		Increment = 0.05,
-		Suffix = "s",
-		CurrentValue = 0.35,
-		Flag = "FarmAttackDelay",
-		Callback = function(value)
+		name = "Attack Delay",
+		range = { 0.1, 2 },
+		increment = 0.05,
+		suffix = " s",
+		value = 0.35,
+		flag = "FarmAttackDelay",
+		callback = function(value)
 			FarmController.setAttackDelay(value)
 		end,
 	})
 end
 
 do
-	ClanTab:CreateSection("Clan Reroll")
-	ClanTab:CreateParagraph({
-		Title = "Main Menu Reroll",
-		Content = "Clan reroll in Project Slayers 2 is done through the game's main menu (no NPC involved). This module triggers the menu's reroll action and, in loop mode, rerolls until your target clan. Locked until release - needs the menu GUI and reroll remote paths from the instance file.",
+	ClanTab:CreateSection({ name = "Clan Reroll" })
+	ClanTab:CreateText({
+		name = "Main Menu Reroll",
+		text = "Clan reroll in Project Slayers 2 is done through the game's main menu (no NPC involved). This module triggers the menu's reroll action and, in loop mode, rerolls until your target clan. Locked until release - needs the menu GUI and reroll remote paths from the instance file.",
 	})
 	local clanToggle
 	clanToggle = ClanTab:CreateToggle({
-		Name = "Enable Clan Reroll",
-		CurrentValue = false,
-		Flag = "ClanEnable",
-		Callback = function(value)
+		name = "Enable Clan Reroll",
+		value = false,
+		flag = "ClanEnable",
+		callback = function(value)
 			local ok = ClanController.setEnabled(value)
-			if value and not ok then
+			if value and not ok and clanToggle then
 				clanToggle:Set(false)
 			end
 		end,
 	})
+	lockUntilRelease(clanToggle)
+	if clanToggle.value and not GameDetector.isGameReady() then
+		pcall(function()
+			clanToggle:Set(false, true)
+		end)
+	end
 	ClanTab:CreateDropdown({
-		Name = "Mode",
-		Options = { "Reroll Once", "Reroll Until Target" },
-		CurrentOption = { "Reroll Once" },
-		Flag = "ClanMode",
-		Callback = function(option)
+		name = "Mode",
+		options = { "Reroll Once", "Reroll Until Target" },
+		value = "Reroll Once",
+		flag = "ClanMode",
+		callback = function(option)
 			ClanController.setMode(normalizeChoice(option))
 		end,
 	})
 	local clanTargetDropdown = ClanTab:CreateDropdown({
-		Name = "Target Clan",
-		Options = ClanController.getClanOptions(),
-		CurrentOption = {},
-		Flag = "ClanTarget",
-		Callback = function(option)
+		name = "Target Clan",
+		options = ClanController.getClanOptions(),
+		placeholder = "None",
+		forgetState = true,
+		callback = function(option)
 			ClanController.setTarget(normalizeChoice(option))
 		end,
 	})
 	ClanTab:CreateSlider({
-		Name = "Delay Between Rerolls",
-		Range = { 0.5, 10 },
-		Increment = 0.5,
-		Suffix = "s",
-		CurrentValue = 1.5,
-		Flag = "ClanDelay",
-		Callback = function(value)
+		name = "Delay Between Rerolls",
+		range = { 0.5, 10 },
+		increment = 0.5,
+		suffix = " s",
+		value = 1.5,
+		flag = "ClanDelay",
+		callback = function(value)
 			ClanController.setDelay(value)
 		end,
 	})
-	ClanTab:CreateSection("Status")
-	local clanStatus = ClanTab:CreateParagraph({
-		Title = "Status",
-		Content = ClanController.getStatusText(),
+	ClanTab:CreateSection({ name = "Status" })
+	local clanStatus = ClanTab:CreateText({
+		name = "Status",
+		text = ClanController.getStatusText(),
 	})
 	ClanTab:CreateButton({
-		Name = "Refresh Clan Status",
-		Callback = function()
+		name = "Refresh Clan Status",
+		callback = function()
 			pcall(function()
-				clanStatus:Set({ Title = "Status", Content = ClanController.getStatusText() })
+				clanStatus:Set(ClanController.getStatusText())
 			end)
 		end,
 	})
-	ClanTab:CreateButton({
-		Name = "Reload Clan List",
-		Callback = function()
+	local reloadClanButton = ClanTab:CreateButton({
+		name = "Reload Clan List",
+		callback = function()
 			if not GameDetector.requireGame("Clan Reroll") then
 				return
 			end
 			local options = ClanController.getClanOptions()
 			pcall(function()
-				clanTargetDropdown:Set(options)
+				clanTargetDropdown:Refresh(options)
 			end)
 		end,
 	})
+	lockUntilRelease(reloadClanButton)
 end
 
 do
-	EspTab:CreateSection("Players")
+	EspTab:CreateSection({ name = "Players" })
 	EspTab:CreateToggle({
-		Name = "Player ESP",
-		CurrentValue = false,
-		Flag = "EspPlayers",
-		Callback = function(value)
+		name = "Player ESP",
+		value = false,
+		flag = "EspPlayers",
+		callback = function(value)
 			ESPController.setPlayers(value)
 		end,
 	})
 	EspTab:CreateToggle({
-		Name = "Show Names",
-		CurrentValue = true,
-		Flag = "EspNames",
-		Callback = function(value)
+		name = "Show Names",
+		value = true,
+		flag = "EspNames",
+		callback = function(value)
 			ESPController.setNames(value)
 		end,
 	})
 	EspTab:CreateToggle({
-		Name = "Show Distance",
-		CurrentValue = true,
-		Flag = "EspDistance",
-		Callback = function(value)
+		name = "Show Distance",
+		value = true,
+		flag = "EspDistance",
+		callback = function(value)
 			ESPController.setDistance(value)
 		end,
 	})
 	EspTab:CreateToggle({
-		Name = "Health Bars",
-		CurrentValue = true,
-		Flag = "EspHealthBars",
-		Callback = function(value)
+		name = "Health Bars",
+		value = true,
+		flag = "EspHealthBars",
+		callback = function(value)
 			ESPController.setHealthBars(value)
 		end,
 	})
 	EspTab:CreateToggle({
-		Name = "Team Colors",
-		CurrentValue = false,
-		Flag = "EspTeamColor",
-		Callback = function(value)
+		name = "Team Colors",
+		value = false,
+		flag = "EspTeamColor",
+		callback = function(value)
 			ESPController.setTeamColor(value)
 		end,
 	})
 	local tracerToggle
 	tracerToggle = EspTab:CreateToggle({
-		Name = "Tracers (PC only)",
-		CurrentValue = false,
-		Flag = "EspTracers",
-		Callback = function(value)
+		name = "Tracers (PC only)",
+		description = "Needs the Drawing API, which only PC executors provide",
+		value = false,
+		flag = "EspTracers",
+		callback = function(value)
 			local ok = ESPController.setTracers(value)
-			if value and not ok then
+			if value and not ok and tracerToggle then
 				tracerToggle:Set(false)
 			end
 		end,
 	})
 
-	EspTab:CreateSection("NPCs")
+	EspTab:CreateSection({ name = "NPCs" })
 	EspTab:CreateToggle({
-		Name = "NPC / Mob ESP",
-		CurrentValue = false,
-		Flag = "EspNpcs",
-		Callback = function(value)
+		name = "NPC / Mob ESP",
+		value = false,
+		flag = "EspNpcs",
+		callback = function(value)
 			ESPController.setNpcs(value)
 		end,
 	})
 
-	EspTab:CreateSection("General")
+	EspTab:CreateSection({ name = "General" })
 	EspTab:CreateSlider({
-		Name = "Max Distance",
-		Range = { 50, 2000 },
-		Increment = 25,
-		Suffix = "studs",
-		CurrentValue = 250,
-		Flag = "EspMaxDistance",
-		Callback = function(value)
+		name = "Max Distance",
+		range = { 50, 2000 },
+		increment = 25,
+		suffix = " studs",
+		value = 250,
+		flag = "EspMaxDistance",
+		callback = function(value)
 			ESPController.setMaxDistance(value)
 		end,
 	})
 end
 
 do
-	ServerTab:CreateSection("Actions")
-	ServerTab:CreateButton({
-		Name = "Rejoin Server",
-		Callback = function()
+	ServerTab:CreateSection({ name = "Actions" })
+	local actionRow = ServerTab:CreateGroup()
+	actionRow:CreateButton({
+		name = "Rejoin Server",
+		callback = function()
 			ServerController.rejoin()
 		end,
 	})
-	ServerTab:CreateButton({
-		Name = "Server Hop",
-		Callback = function()
+	actionRow:CreateButton({
+		name = "Server Hop",
+		callback = function()
 			ServerController.hop(ServerController.hopMode)
 		end,
 	})
-	ServerTab:CreateButton({
-		Name = "Low Player Hop",
-		Callback = function()
+	actionRow:CreateButton({
+		name = "Low Player Hop",
+		callback = function()
 			ServerController.hop("lowest")
 		end,
 	})
-	ServerTab:CreateSection("Filters")
+	ServerTab:CreateSection({ name = "Filters" })
 	ServerTab:CreateDropdown({
-		Name = "Hop Preference",
-		Options = { "lowest", "highest", "any" },
-		CurrentOption = { "lowest" },
-		Flag = "ServerHopMode",
-		Callback = function(option)
+		name = "Hop Preference",
+		options = { "lowest", "highest", "any" },
+		value = "lowest",
+		flag = "ServerHopMode",
+		callback = function(option)
 			ServerController.setHopMode(normalizeChoice(option))
 		end,
 	})
-	ServerTab:CreateSection("Info")
-	local serverParagraph = ServerTab:CreateParagraph({
-		Title = "Server Info",
-		Content = "Loading...",
+	ServerTab:CreateSection({ name = "Info" })
+	local serverText = ServerTab:CreateText({
+		name = "Server Info",
+		text = "Loading...",
 	})
 	local function refreshServerInfo()
 		local info = ServerController.getInfo()
 		pcall(function()
-			serverParagraph:Set({
-				Title = "Server Info",
-				Content = "PlaceId: " .. tostring(info.placeId)
-					.. "\nJobId: " .. info.jobId
-					.. "\nPlayers: " .. info.playerCount .. "/" .. info.maxPlayers
-					.. "\nPing: " .. (info.ping >= 0 and info.ping .. "ms" or "unavailable"),
-			})
+			serverText:Set("PlaceId: " .. tostring(info.placeId)
+				.. "\nJobId: " .. info.jobId
+				.. "\nPlayers: " .. info.playerCount .. "/" .. info.maxPlayers
+				.. "\nPing: " .. (info.ping >= 0 and info.ping .. " ms" or "unavailable"))
 		end)
 	end
 	refreshServerInfo()
 	ServerTab:CreateButton({
-		Name = "Refresh Server Info",
-		Callback = function()
+		name = "Refresh Server Info",
+		callback = function()
 			refreshServerInfo()
 		end,
 	})
 end
 
 do
-	SettingsTab:CreateSection("Configuration")
+	SettingsTab:CreateSection({ name = "Configuration" })
 	SettingsTab:CreateToggle({
-		Name = "Notifications",
-		CurrentValue = true,
-		Flag = "SetNotifications",
-		Callback = function(value)
+		name = "Notifications",
+		value = true,
+		flag = "SetNotifications",
+		callback = function(value)
 			SettingsController.setNotifications(value)
 		end,
 	})
 	SettingsTab:CreateToggle({
-		Name = "Auto Re-execute on Teleport",
-		CurrentValue = true,
-		Flag = "SetAutoReexecute",
-		Callback = function(value)
+		name = "Auto Re-execute on Teleport",
+		value = true,
+		flag = "SetAutoReexecute",
+		callback = function(value)
 			SettingsController.setAutoReexecute(value)
 		end,
 	})
 	SettingsTab:CreateButton({
-		Name = "Reset Saved Config",
-		Callback = function()
+		name = "Reset Saved Config",
+		callback = function()
 			SettingsController.resetConfig()
 		end,
 	})
 
-	SettingsTab:CreateSection("Performance")
+	SettingsTab:CreateSection({ name = "Performance" })
 	SettingsTab:CreateDropdown({
-		Name = "FPS Boost",
-		Options = { "off", "basic", "full" },
-		CurrentOption = { "off" },
-		Flag = "SetFpsBoost",
-		Callback = function(option)
+		name = "FPS Boost",
+		options = { "off", "basic", "full" },
+		value = "off",
+		flag = "SetFpsBoost",
+		callback = function(option)
 			SettingsController.setFpsBoost(normalizeChoice(option))
 		end,
 	})
 	SettingsTab:CreateToggle({
-		Name = "Fullbright",
-		CurrentValue = false,
-		Flag = "SetFullbright",
-		Callback = function(value)
+		name = "Fullbright",
+		value = false,
+		flag = "SetFullbright",
+		callback = function(value)
 			SettingsController.setFullbright(value)
 		end,
 	})
 
-	SettingsTab:CreateSection("Debug")
+	SettingsTab:CreateSection({ name = "Debug" })
+	local logConsole = SettingsTab:CreateConsole({
+		name = "Log Console",
+		height = 140,
+		follow = true,
+		maxLines = 200,
+	})
+	Logger.setOnLog(function(line)
+		pcall(function()
+			logConsole:Append(line)
+		end)
+	end)
+	pcall(function()
+		logConsole:Set(Logger.getHistory())
+	end)
 	SettingsTab:CreateButton({
-		Name = "Copy Logs",
-		Callback = function()
+		name = "Copy Logs",
+		callback = function()
 			SettingsController.copyLogs()
 		end,
 	})
 	SettingsTab:CreateButton({
-		Name = "Clear Logs",
-		Callback = function()
+		name = "Clear Logs",
+		callback = function()
 			SettingsController.clearLogs()
+			pcall(function()
+				logConsole:Clear()
+			end)
 		end,
 	})
 
-	SettingsTab:CreateSection("Project")
-	SettingsTab:CreateParagraph({
-		Title = "PS2 Hub " .. VERSION,
-		Content = "Made by Faludaddd. Source: " .. REPO_URL,
+	SettingsTab:CreateSection({ name = "Project" })
+	SettingsTab:CreateText({
+		name = "PS2 Hub " .. VERSION,
+		text = "Made by Faludaddd. Source: " .. REPO_URL,
 	})
 	SettingsTab:CreateButton({
-		Name = "Check for Updates",
-		Callback = function()
+		name = "Check for Updates",
+		callback = function()
 			SettingsController.checkUpdate()
 		end,
 	})
 	SettingsTab:CreateButton({
-		Name = "Copy Execute URL",
-		Callback = function()
+		name = "Copy Execute URL",
+		callback = function()
 			SettingsController.copySource()
 		end,
 	})
 	SettingsTab:CreateButton({
-		Name = "Reload Script",
-		Callback = function()
+		name = "Reload Script",
+		callback = function()
 			SettingsController.reloadScript()
 		end,
 	})
 	SettingsTab:CreateButton({
-		Name = "Destroy UI",
-		Callback = function()
+		name = "Destroy UI",
+		callback = function()
 			SettingsController.destroyUi()
 		end,
 	})
