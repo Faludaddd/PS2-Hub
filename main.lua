@@ -1,6 +1,6 @@
 
 
-local VERSION       = "1.0.0"
+local VERSION       = "1.3.0"
 local BUILD_DATE    = "2026-09-14"
 local PROJECT_NAME  = "PS2 Hub"
 
@@ -15,10 +15,12 @@ local GENV_KEY      = "PS2HUB_ACTIVE"
 local GameProfile = {
     name        = "Project Slayers 2",
 
-            PLACE_ID    = 0,
-    GAME_ID     = 0,
+    PLACE_ID    = 16205713724,
+    GAME_ID     = 5595353122,
 
-        aliases     = { "project slayers 2", "ps2" },
+                DATA_READY  = false,
+
+        aliases     = { "project slayers 2", "slayers 2", "ps2" },
 
         NPC = {
                                 containers = {
@@ -47,12 +49,39 @@ local GameProfile = {
                 excludePatterns = { "dummy", "training", "shop", "merchant", "quest" },
     },
 
-                QUEST = {
-        enabled        = false,
-        containers     = { "Quests", "Quest" },
+                    CLAN = {
+        enabled = false,
+
+                        clanStatNames = { "Clan", "ClanName" },
+
+        reroll = {
+                                    npcNamePatterns = {},
+            promptPatterns  = {},
+
+                        remoteName = "",
+            remoteArgs = {},
+        },
+
+                knownClans = {},
+    },
+
+                        QUEST = {
+        enabled        = true,
+        containers     = { "Quests", "Quest", "NPCs", "NPC" },
         tags           = { "Quest", "QuestGiver" },
-        giverPatterns  = { "quest", "giver" },
+        giverPatterns  = { "quest", "giver", "task", "job" },
+        promptPatterns = { "talk", "accept", "quest", "turn in", "turn-in", "interact", "complete" },
+        objectiveUIPatterns = { "quest", "objective", "task" },
+        completionPatterns = { "complete", "completed", "done", "turn in", "return to", "finish", "reward" },
                 objectiveSources = {},
+    },
+
+            ITEMS = {
+        tags = { "Item", "Drop", "Loot", "Pickup" },
+        namePatterns = {
+            "drop", "item", "yen", "coin", "gold", "money", "loot",
+            "potion", "chest", "ore", "crystal", "shard",
+        },
     },
 
         INTERACTION = {
@@ -471,6 +500,7 @@ State.intervals = {
     targetScan  = 2.0,
     automation  = 0.25,
     serverInfo  = 2.0,
+    espUpdate   = 0.1,
 }
 
 State.settings = {
@@ -694,7 +724,12 @@ function GameDetector.check()
     end
 
     if GameDetector.verified then
-        Logger:info("Game verified: " .. game.Name .. " (" .. GameDetector.reason .. ")")
+        if GameProfile.DATA_READY then
+            Logger:info("Game verified: " .. game.Name .. " (" .. GameDetector.reason .. ")")
+        else
+            Logger:info("Game matched: " .. game.Name .. " (" .. GameDetector.reason
+                .. ") — game data pending release, game-specific features stay locked")
+        end
     else
         Logger:warn("Wrong game detected — PS2 automation locked")
     end
@@ -702,7 +737,17 @@ function GameDetector.check()
 end
 
 function GameDetector.shouldEnableGameFeatures()
-        return GameDetector.verified
+                return GameDetector.verified and GameProfile.DATA_READY == true
+end
+
+function GameDetector.gameLockReason()
+    if GameProfile.DATA_READY ~= true then
+        return "Slayers 2 not released yet — awaiting game instance data"
+    end
+    if not GameDetector.verified then
+        return "Only runs in Project Slayers 2"
+    end
+    return nil
 end
 
 local UserInputService   = game:GetService("UserInputService")
@@ -2664,35 +2709,8 @@ function AutomationController:isModeAvailable(mode)
     return true
 end
 
-local function tickAutomation()
-    local auto = AutomationController
+local function farmTick()
     local state = State.automation
-
-    if not auto.enabled then return end
-
-        if not Util.aliveLocal() then
-        if state.taskState ~= "WaitingRespawn" then
-            state.taskState = "WaitingRespawn"
-            MovementController:cancel("player defeated")
-            Logger:info("Player defeated — waiting for respawn")
-        end
-        return
-    end
-    if state.taskState == "WaitingRespawn" then
-        Logger:info("Respawned — automation resuming")
-        state.taskState = "Searching"
-    end
-
-        local mode = TargetManager.mode
-    if mode == "Quest" and not QuestController.isAvailable() then
-        if not auto._questWarned then
-            auto._questWarned = true
-            Logger:warn("Quest mode unavailable — needs GameProfile.QUEST data")
-            Notify.toast("Automation", "Quest mode awaiting game data")
-        end
-        state.taskState = "Idle"
-        return
-    end
 
         local target = state.target
     if target then
@@ -2710,7 +2728,7 @@ local function tickAutomation()
             if AutomationController._lastLoggedTarget ~= entry.name then
                 Logger:info("Current target: " .. entry.name)
                 AutomationController._lastLoggedTarget = entry.name
-                                            end
+            end
         else
             if state.taskState ~= "Searching" then
                 state.taskState = "Searching"
@@ -2728,7 +2746,7 @@ local function tickAutomation()
         end
         local status = MovementController:tick(0.25)
         if status == "failed" then
-                        Logger:warn("Movement to target failed — acquiring another")
+            Logger:warn("Movement to target failed — acquiring another")
             TargetManager:skipTemporarily(target.name, 15)
             state.target = nil
             state.taskState = "Searching"
@@ -2758,11 +2776,61 @@ local function tickAutomation()
     end
 end
 
+local function tickAutomation()
+    local auto = AutomationController
+    local state = State.automation
+
+    if not auto.enabled then return end
+
+        if not Util.aliveLocal() then
+        if state.taskState ~= "WaitingRespawn" then
+            state.taskState = "WaitingRespawn"
+            MovementController:cancel("player defeated")
+            Logger:info("Player defeated — waiting for respawn")
+        end
+        return
+    end
+    if state.taskState == "WaitingRespawn" then
+        Logger:info("Respawned — automation resuming")
+        state.taskState = "Searching"
+    end
+
+            local mode = TargetManager.mode
+    if mode == "Quest" then
+        if not QuestController.isAvailable() then
+            if not auto._questWarned then
+                auto._questWarned = true
+                Logger:warn("Quest mode unavailable — game data pending release")
+                Notify.toast("Automation", "Quest mode awaiting game release data")
+            end
+            state.taskState = "Idle"
+            return
+        end
+                if QuestController.state ~= "Active"
+           and MovementController._active
+           and not QuestController:isGiver(MovementController._entry) then
+            MovementController:cancel("quest: heading to giver")
+        end
+        QuestController:tick()
+        local questState = QuestController.state
+        if questState == "Active" then
+            farmTick()
+        else
+            state.target = nil
+        end
+        state.taskState = "Quest: " .. questState
+        return
+    end
+
+    farmTick()
+end
+
 function AutomationController:start()
     if self.enabled then return end
     if not GameDetector.shouldEnableGameFeatures() then
-        Logger:warn("Automation requires the target game (profile unconfigured or mismatched)")
-        Notify.toast("Automation", "Locked until the game profile is configured")
+        local reason = GameDetector.gameLockReason() or "Only runs in Project Slayers 2"
+        Logger:warn("Automation locked: " .. reason)
+        Notify.toast("Automation", "Locked — " .. reason)
         return false
     end
     self.enabled = true
@@ -2804,56 +2872,1175 @@ function AutomationController:Cleanup()
     self:stop()
 end
 
+QuestController.enabled     = false
+QuestController.autoAccept  = true
+QuestController.autoTurnIn  = true
+QuestController.state       = "Idle"
+QuestController.givers      = {}
+QuestController.objectiveText = ""
+QuestController.active      = false
+
+QuestController._loop        = nil
+QuestController._objectiveLabel = nil
+QuestController._lastObjective  = ""
+QuestController._giverScanAt    = 0
+QuestController._uiScanAt       = 0
+QuestController._nextFireAt     = 0
+QuestController._giverSkip      = {}
+
 function QuestController.isAvailable()
-    return GameProfile.QUEST.enabled == true
+            return GameDetector.shouldEnableGameFeatures() and GameProfile.QUEST.enabled == true
+end
+
+function QuestController:detectQuestUI(force)
+    if not force and self._objectiveLabel and self._objectiveLabel.Parent then
+        return self._objectiveLabel
+    end
+    self._objectiveLabel = nil
+
+    local okGui, gui = pcall(function() return LocalPlayer:FindFirstChild("PlayerGui") end)
+    if not okGui or not gui then
+        return nil, "PlayerGui not found"
+    end
+    local okD, labels = pcall(function() return gui:GetDescendants() end)
+    if not okD or type(labels) ~= "table" then
+        return nil, "PlayerGui not readable"
+    end
+
+    local best, bestScore = nil, 0
+    for _, inst in ipairs(labels) do
+        local isLabel = false
+        pcall(function() isLabel = inst:IsA("TextLabel") end)
+        if isLabel then
+            local text = ""
+            pcall(function() text = tostring(inst.Text or "") end)
+            if #Util.trim(text) > 0 then
+                local path, name = "", ""
+                pcall(function() path = string.lower(inst:GetFullName()) end)
+                pcall(function() name = string.lower(inst.Name) end)
+                local score = 0
+                if Util.matchAny(GameProfile.QUEST.objectiveUIPatterns, path) then
+                    score = 3
+                elseif Util.matchAny(GameProfile.QUEST.objectiveUIPatterns, name) then
+                    score = 2
+                elseif Util.matchAny(GameProfile.QUEST.objectiveUIPatterns, text) then
+                    score = 1
+                end
+                if score > bestScore then
+                    best, bestScore = inst, score
+                end
+            end
+        end
+    end
+    if best then
+        self._objectiveLabel = best
+        return best
+    end
+    return nil, "no quest UI detected"
+end
+
+function QuestController:readObjective()
+    local label = self:detectQuestUI(false)
+    if not label then return "" end
+    local ok, text = pcall(function() return label.Text end)
+    if not ok then return "" end
+    return Util.trim(tostring(text or ""))
+end
+
+local function qualifyGiver(model, tagged)
+    if not (typeof(model) == "Instance" and model:IsA("Model")) then
+        return nil
+    end
+    local root = Util.findRootOf(model)
+    if not root then return nil end
+
+    local prompt
+    pcall(function() prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true) end)
+    if not prompt then return nil end
+
+    if not tagged then
+        local qualifies = Util.matchAny(GameProfile.QUEST.giverPatterns, model.Name or "")
+        if not qualifies then
+            local promptText = ""
+            pcall(function()
+                promptText = string.format(
+                    "%s %s",
+                    tostring(prompt.ActionText or ""),
+                    tostring(prompt.ObjectText or "")
+                )
+            end)
+            qualifies = Util.matchAny(GameProfile.QUEST.promptPatterns, promptText)
+        end
+        if not qualifies then return nil end
+    end
+
+    local hum
+    pcall(function() hum = model:FindFirstChildOfClass("Humanoid") end)
+    return {
+        model    = model,
+        name     = model.Name,
+        root     = root,
+        humanoid = hum,
+        prompt   = prompt,
+        distance = math.huge,
+        path     = model:GetFullName(),
+    }
+end
+
+function QuestController:scanGivers(force)
+    local now = os.clock()
+    if not force and now - self._giverScanAt < 5 then
+        return self.givers
+    end
+    self._giverScanAt = now
+
+    local givers = {}
+    local seen = {}
+
+        for _, tag in ipairs(GameProfile.QUEST.tags or {}) do
+        local ok, tagged = pcall(function() return CollectionService:GetTagged(tag) end)
+        if ok and type(tagged) == "table" then
+            for _, inst in ipairs(tagged) do
+                if not seen[inst] then
+                    local giver = qualifyGiver(inst, true)
+                    if giver then
+                        seen[inst] = true
+                        table.insert(givers, giver)
+                    end
+                end
+            end
+        end
+    end
+
+            local okC, children = pcall(function() return workspace:GetChildren() end)
+    if okC and type(children) == "table" then
+        for _, child in ipairs(children) do
+            local isCandidate = false
+            for _, wanted in ipairs(GameProfile.QUEST.containers or {}) do
+                if child.Name == wanted then
+                    isCandidate = true
+                    break
+                end
+            end
+            if not isCandidate and Util.matchAny(GameProfile.QUEST.giverPatterns, child.Name or "") then
+                isCandidate = true
+            end
+            if isCandidate then
+                local okD, kids = pcall(function() return child:GetDescendants() end)
+                if okD and type(kids) == "table" then
+                    for _, inst in ipairs(kids) do
+                        if not seen[inst] then
+                            local giver = qualifyGiver(inst, false)
+                            if giver then
+                                seen[inst] = true
+                                table.insert(givers, giver)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    self.givers = givers
+    return givers
+end
+
+function QuestController:nearestGiver()
+    local myRoot = Util.getRoot()
+    if not myRoot then return nil end
+    local now = os.clock()
+    local best, bestDist = nil, math.huge
+    for _, giver in ipairs(self.givers) do
+        local alive = false
+        pcall(function()
+            alive = giver.model.Parent ~= nil and giver.root.Parent ~= nil
+        end)
+        if not alive then
+                    elseif self._giverSkip[giver.name] and now < self._giverSkip[giver.name] then
+                    else
+            local ok, dist = pcall(function()
+                return (giver.root.Position - myRoot.Position).Magnitude
+            end)
+            if ok and dist < bestDist then
+                best, bestDist = giver, dist
+            end
+        end
+    end
+    return best
+end
+
+function QuestController:isGiver(entry)
+    return type(entry) == "table" and entry.prompt ~= nil
+end
+
+local function fireGiverPrompt(giver)
+    local prompt = giver.prompt
+    if not (prompt and prompt.Parent) then
+        pcall(function()
+            giver.prompt = giver.model:FindFirstChildWhichIsA("ProximityPrompt", true)
+            prompt = giver.prompt
+        end)
+    end
+    if not prompt then return false end
+    local ok = pcall(function() prompt:FirePrompt() end)
+    if ok then
+        Logger:debug("Quest prompt fired: " .. tostring(giver.name))
+    end
+    return ok
+end
+
+function QuestController:approach(giver)
+    local myRoot = Util.getRoot()
+    if not (myRoot and giver.root and giver.root.Parent) then
+        return false
+    end
+
+    local range = 8
+    pcall(function()
+        local maxDist = giver.prompt and giver.prompt.MaxActivationDistance
+        if type(maxDist) == "number" and maxDist > 0 then
+            range = math.max(4, math.min(12, maxDist - 0.5))
+        end
+    end)
+    local dist
+    local okD, d = pcall(function() return (giver.root.Position - myRoot.Position).Magnitude end)
+    dist = okD and d or math.huge
+
+    if dist <= range then
+        if MovementController._active then
+            MovementController:cancel("quest giver in range")
+        end
+        return fireGiverPrompt(giver)
+    end
+
+        if MovementController._active and MovementController._entry ~= giver then
+        return false
+    end
+
+    if not MovementController._active or MovementController._entry ~= giver then
+        giver.distance = dist
+        MovementController:begin(giver)
+    end
+    local status = MovementController:tick(0.5)
+    if status == "failed" then
+        MovementController:cancel("quest walk failed")
+        self._giverSkip[giver.name] = os.clock() + 20
+        Logger:warn("Quest: walking to " .. tostring(giver.name) .. " failed — trying another giver")
+    end
+    return false
+end
+
+function QuestController:tick()
+    if not self.enabled then return end
+
+    if not Util.aliveLocal() then
+        if self.state ~= "WaitingRespawn" then
+            self.state = "WaitingRespawn"
+            MovementController:cancel("quest: player defeated")
+        end
+        return
+    end
+
+        if State.automation.enabled and TargetManager.mode ~= "Quest" then
+        if self.state ~= "Paused (automation active)" then
+            self.state = "Paused (automation active)"
+            Logger:debug("Quest loop paused — automation owns movement")
+        end
+        return
+    end
+
+    local now = os.clock()
+    if now - self._uiScanAt > 5 then
+        self._uiScanAt = now
+        self:detectQuestUI(true)
+        self:scanGivers(false)
+    end
+
+    local objective = self:readObjective()
+    if objective ~= self._lastObjective and objective ~= "" then
+        self._lastObjective = objective
+        Logger:info("Quest objective: " .. objective)
+    end
+    self.objectiveText = objective
+
+        if objective ~= "" and self.autoTurnIn
+       and Util.matchAny(GameProfile.QUEST.completionPatterns, string.lower(objective)) then
+        self.state = "TurningIn"
+        if now >= self._nextFireAt then
+            local giver = self:nearestGiver()
+            if giver and self:approach(giver) then
+                self._nextFireAt = now + 1.5
+                Notify.toast("Quest", "Turn-in prompt fired")
+            end
+        end
+        return
+    end
+
+        if objective == "" then
+        if self.autoAccept and now >= self._nextFireAt then
+            local giver = self:nearestGiver()
+            if giver then
+                self.state = "GoingToGiver"
+                if self:approach(giver) then
+                    self._nextFireAt = now + 2
+                    self.state = "Active"
+                end
+            else
+                if self.state ~= "NoQuest" then
+                    self.state = "NoQuest"
+                    Logger:debug("Quest: no givers found near you")
+                end
+            end
+        else
+            self.state = "NoQuest"
+        end
+        return
+    end
+
+            self.state = "Active"
+end
+
+function QuestController:start()
+    if self.enabled then return end
+    if not self.isAvailable() then
+        Logger:warn("Quest loop locked — " .. (GameDetector.gameLockReason() or "GameProfile.QUEST disabled"))
+        return false
+    end
+    self.enabled = true
+    self.active = true
+    self.state = "NoQuest"
+    self._nextFireAt = 0
+    self:scanGivers(true)
+    self:detectQuestUI(true)
+    self._loop = Tracker.loop("quest.tick", 0.5, function()
+        QuestController:tick()
+    end)
+    Notify.notify("Quest loop enabled", string.format(
+        "%d quest giver(s) detected", #self.givers))
+    Logger:info(string.format("Quest loop enabled (%d givers, objective %s)",
+        #self.givers, self.objectiveText ~= "" and "found" or "not found"))
+    return true
+end
+
+function QuestController:stop()
+    if self._loop then
+        self._loop:Stop()
+        self._loop = nil
+    end
+    local wasEnabled = self.enabled
+    self.enabled = false
+    self.active = false
+    self.state = "Idle"
+    if not State.automation.enabled then
+        MovementController:cancel("quest stopped")
+    end
+    if wasEnabled then
+        Logger:info("Quest loop disabled")
+    end
+end
+
+function QuestController:setLoop(enabled)
+    if enabled then
+        local ok = self:start()
+        return ok ~= false
+    end
+    self:stop()
+    return true
 end
 
 function QuestController:detectCurrentQuest()
-    if not self.isAvailable() then
-        return nil, "quest system not configured"
+            local label, reason = self:detectQuestUI(true)
+    if not label then
+        return nil, reason
     end
-            return nil, "not implemented — awaiting game data"
+    local text = self:readObjective()
+    return { text = text, label = label }, nil
 end
 
 function QuestController:findQuestGivers()
-    if not self.isAvailable() then
-        return {}, "quest system not configured"
+        self:scanGivers(true)
+    if #self.givers == 0 then
+        return self.givers, "no quest givers detected (try standing near one)"
     end
-            return {}, "not implemented — awaiting game data"
+    return self.givers, nil
 end
 
 function QuestController:Start()
     if self.isAvailable() then
-        Logger:info("Quest controller enabled (profile configured)")
+        Logger:info("Quest controller ready (generic detection patterns)")
     else
-        Logger:info("Quest controller dormant — awaiting GameProfile.QUEST data")
+        Logger:info("Quest controller dormant — game data pending release")
     end
 end
 
-function QuestController:Cleanup() end
+function QuestController:Stop()
+    self:stop()
+end
+
+function QuestController:Cleanup()
+    self:stop()
+    self.givers = {}
+    self._objectiveLabel = nil
+end
+
+local ClanController = {}
+
+ClanController.enabled      = false
+ClanController.mode         = "Count"
+ClanController.targetClan   = ""
+ClanController.maxRerolls   = 10
+ClanController.delay        = 1.5
+ClanController.rerollCount  = 0
+ClanController.currentClan  = ""
+ClanController.state        = "Idle"
+
+ClanController._loop        = nil
+ClanController._nextRerollAt = 0
+ClanController._rerollNpc   = nil
+ClanController._npcScanAt   = 0
+
+function ClanController.isAvailable()
+    return GameDetector.shouldEnableGameFeatures()
+        and GameProfile.CLAN.enabled == true
+end
+
+function ClanController:readCurrentClan()
+    local names = GameProfile.CLAN.clanStatNames or {}
+
+    local okS, stats = pcall(function()
+        return LocalPlayer:FindFirstChild("leaderstats")
+    end)
+    if okS and stats then
+        for _, statName in ipairs(names) do
+            local okC, child = pcall(function()
+                return stats:FindFirstChild(statName)
+            end)
+            if okC and child then
+                local okV, value = pcall(function() return child.Value end)
+                if okV and type(value) == "string" and Util.trim(value) ~= "" then
+                    return Util.trim(value)
+                end
+            end
+        end
+    end
+
+    for _, attrName in ipairs(names) do
+        local okA, value = pcall(function()
+            return LocalPlayer:GetAttribute(attrName)
+        end)
+        if okA and type(value) == "string" and Util.trim(value) ~= "" then
+            return Util.trim(value)
+        end
+    end
+    return ""
+end
+
+function ClanController:findRerollNPC()
+    local profile = GameProfile.CLAN.reroll or {}
+    local namePatterns = profile.npcNamePatterns or {}
+    local promptPatterns = profile.promptPatterns or {}
+    if #namePatterns == 0 and #promptPatterns == 0 then
+        return nil
+    end
+
+    local now = os.clock()
+    if now - self._npcScanAt < 5 and self._rerollNpc then
+        local alive = false
+        pcall(function()
+            alive = self._rerollNpc.model.Parent ~= nil
+        end)
+        if alive then
+            return self._rerollNpc
+        end
+    end
+    self._npcScanAt = now
+
+    local okC, children = pcall(function() return workspace:GetChildren() end)
+    if not (okC and type(children) == "table") then
+        return nil
+    end
+
+    for _, child in ipairs(children) do
+        local isModel = false
+        pcall(function() isModel = child:IsA("Model") end)
+        if isModel then
+            local matched = false
+            pcall(function()
+                matched = Util.matchAny(namePatterns, child.Name or "")
+            end)
+            if matched then
+                local root = Util.findRootOf(child)
+                local prompt
+                pcall(function()
+                    prompt = child:FindFirstChildWhichIsA("ProximityPrompt", true)
+                end)
+                if root and prompt then
+                    local promptText = ""
+                    pcall(function()
+                        promptText = string.format(
+                            "%s %s",
+                            tostring(prompt.ActionText or ""),
+                            tostring(prompt.ObjectText or "")
+                        )
+                    end)
+                    if #promptPatterns == 0 or Util.matchAny(promptPatterns, promptText) then
+                        local path = tostring(child.Name)
+                        pcall(function() path = child:GetFullName() end)
+                        self._rerollNpc = {
+                            model = child,
+                            name = child.Name,
+                            root = root,
+                            humanoid = nil,
+                            prompt = prompt,
+                            distance = math.huge,
+                            path = path,
+                        }
+                        return self._rerollNpc
+                    end
+                end
+            end
+        end
+    end
+    self._rerollNpc = nil
+    return nil
+end
+
+function ClanController:fireRemote()
+    local profile = GameProfile.CLAN.reroll or {}
+    local remoteName = profile.remoteName or ""
+    if remoteName == "" then
+        return false
+    end
+    local okS, storage = pcall(function()
+        return game:GetService("ReplicatedStorage")
+    end)
+    if not (okS and storage) then
+        return false
+    end
+    local okF, remote = pcall(function()
+        return storage:FindFirstChild(remoteName, true)
+    end)
+    if not (okF and remote) then
+        Logger:warn("Clan reroll remote not found: " .. remoteName)
+        return false
+    end
+    local args = profile.remoteArgs or {}
+    local ok = pcall(function()
+        remote:FireServer(table.unpack(args))
+    end)
+    if ok then
+        Logger:debug("Clan reroll remote fired: " .. remoteName)
+    end
+    return ok
+end
+
+function ClanController:performReroll()
+    if (GameProfile.CLAN.reroll or {}).remoteName ~= "" then
+        return self:fireRemote()
+    end
+    local npc = self:findRerollNPC()
+    if not npc then
+        return false
+    end
+    return QuestController:approach(npc) == true
+end
+
+function ClanController:rerollOnce()
+    if not self.isAvailable() then
+        return false, GameDetector.gameLockReason() or "Clan reroll unavailable"
+    end
+    if not Util.aliveLocal() then
+        return false, "No character yet"
+    end
+    if (GameProfile.CLAN.reroll or {}).remoteName ~= "" then
+        if self:fireRemote() then
+            self.rerollCount = self.rerollCount + 1
+            self.currentClan = self:readCurrentClan()
+            return true
+        end
+        return false, "Reroll remote not found"
+    end
+    local npc = self:findRerollNPC()
+    if not npc then
+        return false, "No reroll NPC detected — patterns arrive with release data"
+    end
+    local myRoot = Util.getRoot()
+    if not (myRoot and npc.root and npc.prompt) then
+        return false, "Reroll NPC not reachable right now"
+    end
+    local range = 8
+    pcall(function()
+        local maxDist = npc.prompt.MaxActivationDistance
+        if type(maxDist) == "number" and maxDist > 0 then
+            range = math.max(4, math.min(12, maxDist - 0.5))
+        end
+    end)
+    local dist
+    local okD, d = pcall(function()
+        return (npc.root.Position - myRoot.Position).Magnitude
+    end)
+    dist = okD and d or math.huge
+    if dist > range then
+        return false, "Too far from " .. tostring(npc.name) .. " (enable Auto Reroll to walk)"
+    end
+    local ok = pcall(function() npc.prompt:FirePrompt() end)
+    if ok then
+        self.rerollCount = self.rerollCount + 1
+        self.currentClan = self:readCurrentClan()
+        Logger:debug("Manual clan reroll fired (" .. self.rerollCount .. " total)")
+        return true
+    end
+    return false, "Reroll prompt failed to fire"
+end
+
+function ClanController:_finish(finalState, title, content)
+    self.state = finalState
+    self.enabled = false
+    if self._loop then
+        self._loop:Stop()
+        self._loop = nil
+    end
+    Notify.notify(title, content)
+    Logger:info(title .. " — " .. content)
+end
+
+function ClanController:tick()
+    if not self.enabled then return end
+
+    if not self.isAvailable() then
+        self.state = "AwaitingData"
+        return
+    end
+    if not Util.aliveLocal() then
+        if self.state ~= "WaitingRespawn" then
+            self.state = "WaitingRespawn"
+            MovementController:cancel("clan: player defeated")
+        end
+        return
+    end
+
+    local now = os.clock()
+    if now < self._nextRerollAt then return end
+
+    self.currentClan = self:readCurrentClan()
+    if self.mode == "UntilTarget" and self.targetClan ~= "" and self.currentClan ~= "" then
+        if self.currentClan:lower() == self.targetClan:lower() then
+            self:_finish(
+                "TargetReached",
+                "Clan reroll done",
+                string.format("Target clan reached: %s (%d reroll%s)",
+                    self.currentClan, self.rerollCount,
+                    self.rerollCount == 1 and "" or "s")
+            )
+            return
+        end
+    end
+    if self.maxRerolls > 0 and self.rerollCount >= self.maxRerolls then
+        self:_finish(
+            "LimitReached",
+            "Clan reroll stopped",
+            string.format("Reroll limit reached (%d) — current clan: %s",
+                self.maxRerolls,
+                self.currentClan ~= "" and self.currentClan or "unknown")
+        )
+        return
+    end
+
+    self.state = "Rerolling"
+    local ok = self:performReroll()
+    self._nextRerollAt = now + math.max(0.2, self.delay)
+    if ok then
+        self.rerollCount = self.rerollCount + 1
+        Logger:debug(string.format("Clan reroll %d fired (%s)",
+            self.rerollCount, self.currentClan ~= "" and self.currentClan or "clan unreadable"))
+    end
+end
+
+function ClanController:setEnabled(enabled)
+    enabled = enabled and true or false
+    if enabled == self.enabled then
+        return true
+    end
+
+    if enabled then
+        if not self.isAvailable() then
+            local reason = GameDetector.gameLockReason() or "Clan data not configured"
+            Logger:warn("Clan reroll locked: " .. reason)
+            Notify.toast("Clan", "Locked — " .. reason)
+            return false
+        end
+        self.enabled = true
+        self.rerollCount = 0
+        self.state = "Rerolling"
+        self._nextRerollAt = 0
+        self._rerollNpc = nil
+        self.currentClan = self:readCurrentClan()
+        self._loop = Tracker.loop("clan.tick", 0.5, function()
+            ClanController:tick()
+        end)
+                                if not self.enabled and self._loop then
+            self._loop:Stop()
+            self._loop = nil
+        end
+        Notify.notify("Clan reroll enabled", "Mode: "
+            .. (self.mode == "UntilTarget" and ("until " .. self.targetClan) or ("up to " .. self.maxRerolls)))
+        Logger:info("Clan reroll loop enabled (mode " .. self.mode .. ")")
+    else
+        self.enabled = false
+        if self._loop then
+            self._loop:Stop()
+            self._loop = nil
+        end
+        if not State.automation.enabled then
+            MovementController:cancel("clan reroll stopped")
+        end
+        self.state = "Idle"
+        Logger:info("Clan reroll loop disabled")
+    end
+    return true
+end
+
+function ClanController:stop()
+    self:setEnabled(false)
+end
+
+function ClanController:Start()
+    if self.isAvailable() then
+        Logger:info("Clan controller ready (reroll paths configured)")
+    else
+        Logger:info("Clan controller dormant — awaiting the released game's instance data")
+    end
+end
+
+function ClanController:Stop()
+    self:stop()
+end
+
+function ClanController:Cleanup()
+    self:stop()
+    self._rerollNpc = nil
+end
 
 local ESPController = {}
-
-ESPController.categories = {
-    { id = "Players",    label = "Players",     source = "players" },
-    { id = "NPCs",       label = "NPCs",        source = "discovery" },
-    { id = "Bosses",     label = "Bosses",      source = "discovery" },
-    { id = "QuestNPCs",  label = "Quest NPCs",  source = "discovery" },
-    { id = "Items",      label = "Items & Drops", source = "none" },
-}
 
 ESPController.settings = {
     updateRate   = 0.1,
     maxDistance  = 2000,
 }
 
-ESPController._provider = nil
-ESPController._loop     = nil
-ESPController.enabled   = false
+ESPController.enabled      = false
+ESPController.rendererMode = nil
+ESPController.stats        = { total = 0, drawn = 0 }
 
-function ESPController:integrate(provider)
-        self._provider = provider
-    Logger:info("ESP render provider integrated")
+ESPController._loop     = nil
+ESPController._pool     = {}
+ESPController._folder   = nil
+ESPController._items    = {}
+ESPController._itemScan = 0
+
+local ITEM_COLOR = Color3.fromRGB(200, 200, 215)
+local ITEM_SCAN_EVERY = 5
+local ITEM_SCAN_CAP   = 3000
+
+local function drawingAvailable()
+    return type(Drawing) == "table" and type(Drawing.new) == "function"
+end
+
+local function espFolder()
+    if ESPController._folder and ESPController._folder.Parent then
+        return ESPController._folder
+    end
+    local folder
+    pcall(function()
+        folder = Instance.new("Folder")
+        folder.Name = "PS2Hub_ESP"
+        folder.Parent = game:GetService("CoreGui")
+    end)
+    if not (folder and folder.Parent) then
+        pcall(function()
+            folder = Instance.new("Folder")
+            folder.Name = "PS2Hub_ESP"
+            folder.Parent = workspace
+        end)
+    end
+    ESPController._folder = folder
+    return folder
+end
+
+local function dset(obj, key, value)
+    if obj then
+        pcall(function() obj[key] = value end)
+    end
+end
+
+local function newDrawing(kind)
+    local ok, obj = pcall(function() return Drawing.new(kind) end)
+    if ok and obj then
+        return obj
+    end
+    return nil
+end
+
+local function removeDrawing(obj)
+    if obj then
+        pcall(function() obj:Remove() end)
+    end
+end
+
+local function removeInstance(obj)
+    if obj then
+        pcall(function() obj:Destroy() end)
+    end
+end
+
+local function colorFor(entry)
+    local colors = State.esp.colors or {}
+    if entry.isPlayer then
+        return colors.Players or Color3.fromRGB(80, 200, 120)
+    end
+    if entry.category == "Bosses" or entry.category == "Boss" then
+        return colors.Bosses or Color3.fromRGB(230, 70, 70)
+    end
+    if entry.category == "Items" then
+        return ITEM_COLOR
+    end
+    return colors.NPCs or Color3.fromRGB(255, 170, 60)
+end
+
+local function healthColor(ratio)
+    ratio = Util.clamp(ratio, 0, 1)
+    local r, g
+    if ratio >= 0.5 then
+        local t = (ratio - 0.5) * 2
+        r = 255 - 175 * t
+        g = 220
+    else
+        local t = ratio * 2
+        r = 255
+        g = 60 + 160 * t
+    end
+    return Color3.fromRGB(math.floor(r + 0.5), math.floor(g + 0.5), 60)
+end
+
+local function modelExtent(entry)
+    local center, sizeY
+    if entry.model and entry.model:IsA("Model") then
+        local ok, cf, size = pcall(function() return entry.model:GetBoundingBox() end)
+        if ok and cf then
+            center = cf.Position
+            sizeY = math.max(size.Y, 2)
+        end
+    end
+    if not center then
+        local ok, pos = pcall(function() return entry.root.Position end)
+        if not ok then return nil, nil end
+        center = pos
+        sizeY = 5
+    end
+    return center, sizeY
+end
+
+local function textFor(entry, dist, display)
+    local parts = {}
+    if display.name then
+        table.insert(parts, tostring(entry.name))
+    end
+    if display.distance then
+        table.insert(parts, string.format("%dm", math.floor(dist)))
+    end
+    if display.health and entry.humanoid then
+        pcall(function()
+            table.insert(parts, string.format("%d/%d",
+                math.floor(entry.humanoid.Health),
+                math.floor(entry.humanoid.MaxHealth)))
+        end)
+    end
+    return table.concat(parts, " · ")
+end
+
+local function newRecord()
+    return {
+        boxOutline = nil, box = nil, healthBg = nil, healthFill = nil,
+        tracer = nil, text = nil,
+        highlight = nil, bbGui = nil, bbLabel = nil,
+    }
+end
+
+local function destroyRecord(rec)
+    if not rec then return end
+    removeDrawing(rec.boxOutline)
+    removeDrawing(rec.box)
+    removeDrawing(rec.healthBg)
+    removeDrawing(rec.healthFill)
+    removeDrawing(rec.tracer)
+    removeDrawing(rec.text)
+    removeInstance(rec.highlight)
+    removeInstance(rec.bbGui)
+end
+
+local function hideRecord(rec)
+    dset(rec.boxOutline, "Visible", false)
+    dset(rec.box, "Visible", false)
+    dset(rec.healthBg, "Visible", false)
+    dset(rec.healthFill, "Visible", false)
+    dset(rec.tracer, "Visible", false)
+    dset(rec.text, "Visible", false)
+    dset(rec.highlight, "Enabled", false)
+    dset(rec.bbGui, "Enabled", false)
+end
+
+local function ensureHighlight(rec, entry, display)
+    if not display.highlight then
+        if rec.highlight then
+            removeInstance(rec.highlight)
+            rec.highlight = nil
+        end
+        return
+    end
+    if not rec.highlight then
+        local ok, hl = pcall(function()
+            local h = Instance.new("Highlight")
+            h.Name = "PS2Hub_ESP"
+            h.FillTransparency = 0.6
+            h.OutlineTransparency = 0
+            h.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+            h.Adornee = entry.model
+            h.Parent = espFolder()
+            return h
+        end)
+        if ok then
+            rec.highlight = hl
+        end
+    end
+    if rec.highlight then
+        dset(rec.highlight, "FillColor", colorFor(entry))
+        dset(rec.highlight, "Enabled", true)
+    end
+end
+
+local function ensureBillboard(rec, entry, center, sizeY, dist, settings, display)
+    local wantText = display.name or display.distance or display.health
+    if not wantText then
+        if rec.bbGui then
+            removeInstance(rec.bbGui)
+            rec.bbGui, rec.bbLabel = nil, nil
+        end
+        return
+    end
+    if not rec.bbGui then
+        local ok, gui, label = pcall(function()
+            local bb = Instance.new("BillboardGui")
+            bb.Name = "PS2Hub_ESP"
+            bb.Size = UDim2.new(0, 220, 0, 60)
+            bb.StudsOffsetWorldSpace = Vector3.new(0, sizeY / 2 + 1.5, 0)
+            bb.AlwaysOnTop = true
+            bb.MaxDistance = settings.maxDistance
+            bb.Adornee = entry.root
+            bb.Parent = espFolder()
+
+            local tl = Instance.new("TextLabel")
+            tl.BackgroundTransparency = 1
+            tl.Size = UDim2.new(1, 0, 1, 0)
+            tl.TextColor3 = colorFor(entry)
+            tl.TextStrokeTransparency = 0.4
+            tl.TextSize = 13
+            tl.Font = Enum.Font.Code
+            tl.Text = ""
+            tl.Parent = bb
+            return bb, tl
+        end)
+        if ok and gui then
+            rec.bbGui, rec.bbLabel = gui, label
+        end
+    end
+    if rec.bbGui then
+        dset(rec.bbGui, "MaxDistance", settings.maxDistance)
+        dset(rec.bbLabel, "Text", textFor(entry, dist, display))
+        dset(rec.bbLabel, "TextColor3", colorFor(entry))
+        dset(rec.bbGui, "Enabled", true)
+    end
+end
+
+local function draw2D(rec, entry, camera, viewport, dist, settings, display)
+    local center, sizeY = modelExtent(entry)
+    if not center then
+        hideRecord(rec)
+        return
+    end
+
+    local okT, top2, onT = pcall(function()
+        return camera:WorldToViewportPoint(center + Vector3.new(0, sizeY / 2 + 0.4, 0))
+    end)
+    local okB, bot2, onB = pcall(function()
+        return camera:WorldToViewportPoint(center - Vector3.new(0, sizeY / 2 + 0.4, 0))
+    end)
+    if not (okT and okB and top2 and bot2) then
+        hideRecord(rec)
+        return
+    end
+    if not (onT or onB) then
+        hideRecord(rec)
+        return
+    end
+
+    local h = math.abs(top2.Y - bot2.Y)
+    local w = math.max(h * 0.55, 10)
+    local cx = (top2.X + bot2.X) / 2
+    local cy = (top2.Y + bot2.Y) / 2
+    local color = colorFor(entry)
+
+        if display.box then
+        if not rec.box then
+            rec.boxOutline = newDrawing("Square")
+            rec.box = newDrawing("Square")
+            dset(rec.boxOutline, "Color", Color3.new(0, 0, 0))
+            dset(rec.box, "Thickness", 1)
+        end
+        dset(rec.boxOutline, "Thickness", 2)
+        dset(rec.boxOutline, "Filled", false)
+        dset(rec.boxOutline, "Position", Vector2.new(cx - w / 2 - 1, cy - h / 2 - 1))
+        dset(rec.boxOutline, "Size", Vector2.new(w + 2, h + 2))
+        dset(rec.boxOutline, "Visible", true)
+        dset(rec.box, "Color", color)
+        dset(rec.box, "Filled", false)
+        dset(rec.box, "Position", Vector2.new(cx - w / 2, cy - h / 2))
+        dset(rec.box, "Size", Vector2.new(w, h))
+        dset(rec.box, "Visible", true)
+    else
+        dset(rec.boxOutline, "Visible", false)
+        dset(rec.box, "Visible", false)
+    end
+
+        local ratio
+    if entry.humanoid then
+        pcall(function()
+            ratio = entry.humanoid.MaxHealth > 0
+                and entry.humanoid.Health / entry.humanoid.MaxHealth
+                or 0
+        end)
+    end
+    if display.health and ratio then
+        ratio = Util.clamp(ratio, 0, 1)
+        if not rec.healthBg then
+            rec.healthBg = newDrawing("Square")
+            rec.healthFill = newDrawing("Square")
+            dset(rec.healthBg, "Color", Color3.new(0, 0, 0))
+            dset(rec.healthBg, "Filled", true)
+            dset(rec.healthFill, "Filled", true)
+        end
+        local bx = cx + w / 2 + 3
+        local fillH = h * ratio
+        dset(rec.healthBg, "Position", Vector2.new(bx, cy - h / 2))
+        dset(rec.healthBg, "Size", Vector2.new(3, h))
+        dset(rec.healthBg, "Visible", true)
+        dset(rec.healthFill, "Color", healthColor(ratio))
+        dset(rec.healthFill, "Position", Vector2.new(bx, cy + h / 2 - fillH))
+        dset(rec.healthFill, "Size", Vector2.new(3, fillH))
+        dset(rec.healthFill, "Visible", true)
+    else
+        dset(rec.healthBg, "Visible", false)
+        dset(rec.healthFill, "Visible", false)
+    end
+
+        if display.tracer and viewport then
+        if not rec.tracer then
+            rec.tracer = newDrawing("Line")
+        end
+        dset(rec.tracer, "Color", color)
+        dset(rec.tracer, "Thickness", 1)
+        dset(rec.tracer, "From", Vector2.new(viewport.X / 2, viewport.Y))
+        dset(rec.tracer, "To", Vector2.new(cx, cy + h / 2))
+        dset(rec.tracer, "Visible", true)
+    else
+        dset(rec.tracer, "Visible", false)
+    end
+
+        local label = textFor(entry, dist, display)
+    if label ~= "" then
+        if not rec.text then
+            rec.text = newDrawing("Text")
+            dset(rec.text, "Size", 13)
+            dset(rec.text, "Center", true)
+            dset(rec.text, "Outline", true)
+            dset(rec.text, "OutlineColor", Color3.new(0, 0, 0))
+        end
+        dset(rec.text, "Text", label)
+        dset(rec.text, "Color", color)
+        dset(rec.text, "Position", Vector2.new(cx, cy - h / 2 - 18))
+        dset(rec.text, "Visible", true)
+    else
+        dset(rec.text, "Visible", false)
+    end
+end
+
+local function looksLikeItem(inst)
+    local name = inst.Name or ""
+    if Util.matchAny(GameProfile.ITEMS.namePatterns, name) then
+        return true
+    end
+    for _, tag in ipairs(GameProfile.ITEMS.tags or {}) do
+        local has = false
+        pcall(function() has = CollectionService:HasTag(inst, tag) end)
+        if has then return true end
+    end
+    return false
+end
+
+local function addItemRecord(items, seen, inst)
+    if seen[inst] then return end
+    local ok, alive = pcall(function() return inst.Parent ~= nil end)
+    if not ok or not alive then return end
+    local root
+    if inst:IsA("BasePart") then
+        root = inst
+    elseif inst:IsA("Model") then
+        root = Util.findRootOf(inst)
+    end
+    if not root then return end
+    seen[inst] = true
+    table.insert(items, {
+        model = inst,
+        name = inst.Name,
+        root = root,
+        humanoid = nil,
+        category = "Items",
+        isPlayer = false,
+    })
+end
+
+local function refreshItems()
+    local items = {}
+    local seen = {}
+
+    for _, tag in ipairs(GameProfile.ITEMS.tags or {}) do
+        local ok, tagged = pcall(function() return CollectionService:GetTagged(tag) end)
+        if ok and type(tagged) == "table" then
+            for _, inst in ipairs(tagged) do
+                addItemRecord(items, seen, inst)
+            end
+        end
+    end
+
+    local scanned = 0
+    local okC, children = pcall(function() return workspace:GetChildren() end)
+    if okC and type(children) == "table" then
+        for _, child in ipairs(children) do
+            local okD, kids = pcall(function() return child:GetChildren() end)
+            if okD and type(kids) == "table" then
+                for _, inst in ipairs(kids) do
+                    scanned = scanned + 1
+                    if scanned > ITEM_SCAN_CAP then break end
+                    if looksLikeItem(inst) then
+                        addItemRecord(items, seen, inst)
+                    end
+                end
+            end
+            if scanned > ITEM_SCAN_CAP then break end
+        end
+    end
+
+    ESPController._items = items
 end
 
 function ESPController:collectEntries()
@@ -2879,7 +4066,7 @@ function ESPController:collectEntries()
         end
     end
 
-    if enabledCats.NPCs or enabledCats.Bosses or enabledCats.QuestNPCs then
+    if enabledCats.NPCs or enabledCats.Bosses then
         for _, entry in ipairs(DiscoveryController.cache) do
             local cat = entry.category
             if cat == "Boss" and enabledCats.Bosses then
@@ -2887,13 +4074,36 @@ function ESPController:collectEntries()
                     model = entry.model, name = entry.name, root = entry.root,
                     humanoid = entry.humanoid, category = "Bosses", isPlayer = false,
                 })
-            elseif cat == "NPC" and (enabledCats.NPCs or (entry.isQuest and enabledCats.QuestNPCs)) then
+            elseif cat == "NPC" and enabledCats.NPCs then
                 table.insert(entries, {
                     model = entry.model, name = entry.name, root = entry.root,
-                    humanoid = entry.humanoid,
-                    category = enabledCats.QuestNPCs and entry.isQuest and "QuestNPCs" or "NPCs",
-                    isPlayer = false,
+                    humanoid = entry.humanoid, category = "NPCs", isPlayer = false,
                 })
+            end
+        end
+    end
+
+    if enabledCats.QuestNPCs then
+        for _, giver in ipairs(QuestController.givers) do
+            local alive = false
+            pcall(function()
+                alive = giver.model.Parent ~= nil and giver.root.Parent ~= nil
+            end)
+            if alive then
+                table.insert(entries, {
+                    model = giver.model, name = giver.name, root = giver.root,
+                    humanoid = giver.humanoid, category = "QuestNPCs", isPlayer = false,
+                })
+            end
+        end
+    end
+
+    if enabledCats.Items then
+        for _, item in ipairs(self._items) do
+            local alive = false
+            pcall(function() alive = item.root.Parent ~= nil end)
+            if alive then
+                table.insert(entries, item)
             end
         end
     end
@@ -2901,38 +4111,119 @@ function ESPController:collectEntries()
     return entries
 end
 
-function ESPController:setEnabled(enabled)
-    if enabled and not self._provider then
-        Logger:warn("ESP disabled: render provider not integrated (send your ESP source)")
-        Notify.toast("ESP", "Awaiting ESP source integration")
-        return false
+function ESPController:drawFrame()
+    local camera = workspace.CurrentCamera
+    if not camera then return end
+
+    if (State.esp.categories or {}).Items then
+        self._itemScan = self._itemScan + 1
+        if self._itemScan >= ITEM_SCAN_EVERY then
+            self._itemScan = 0
+            refreshItems()
+        end
     end
-    self.enabled = enabled and true or false
-    State.esp.enabled = self.enabled
-    if self.enabled then
-        self._loop = Tracker.loop("esp.update", self.settings.updateRate, function()
+
+    local settings = self.settings
+    local display = State.esp.display or {}
+    local entries = self:collectEntries()
+    local pool = self._pool
+    local active = {}
+    local drawn = 0
+
+    local viewport
+    local okV, vp = pcall(function() return camera.ViewportSize end)
+    if okV then viewport = vp end
+    local camPos
+    local okC, cp = pcall(function() return camera.CFrame.Position end)
+    if okC then camPos = cp end
+
+    for _, entry in ipairs(entries) do
+        local okAlive, alive = pcall(function()
+            return entry.model.Parent ~= nil and entry.root.Parent ~= nil
+        end)
+        if not (okAlive and alive) then
+            continue
+        end
+        local okPos, pos = pcall(function() return entry.root.Position end)
+        if not okPos then
+            continue
+        end
+        local dist = camPos and (pos - camPos).Magnitude or 0
+        if dist > settings.maxDistance then
+            continue
+        end
+
+        local rec = pool[entry.model]
+        if not rec then
+            rec = newRecord()
+            pool[entry.model] = rec
+        end
+        active[entry.model] = true
+
+        if self.rendererMode == "drawing" then
+            draw2D(rec, entry, camera, viewport, dist, settings, display)
+        else
+            local center, sizeY = modelExtent(entry)
+            ensureBillboard(rec, entry, center, sizeY, dist, settings, display)
+        end
+        ensureHighlight(rec, entry, display)
+        drawn = drawn + 1
+    end
+
+    for model, rec in pairs(pool) do
+        if not active[model] then
+            destroyRecord(rec)
+            pool[model] = nil
+        end
+    end
+
+    self.stats.total = #entries
+    self.stats.drawn = drawn
+end
+
+function ESPController:setEnabled(enabled)
+    enabled = enabled and true or false
+    if enabled == self.enabled then
+        return true
+    end
+
+    if enabled then
+        self.rendererMode = drawingAvailable() and "drawing" or "highlight"
+        self._pool = {}
+        self._items = {}
+        self._itemScan = 0
+        self.enabled = true
+        State.esp.enabled = true
+        self._loop = Tracker.loop("esp.update", function()
+            return State.intervals.espUpdate
+        end, function()
             if not ESPController.enabled then return end
             local ok, err = pcall(function()
-                ESPController._provider:DrawFrame(
-                    ESPController:collectEntries(),
-                    ESPController.settings
-                )
+                ESPController:drawFrame()
             end)
             if not ok then
                 Logger:errorOnce("ESP frame error: " .. tostring(err))
             end
         end)
-        pcall(function() self._provider:Start() end)
-        Logger:info("ESP enabled")
+        Notify.notify("ESP enabled", "Renderer: " .. self.rendererMode)
+        Logger:info("ESP enabled — renderer " .. self.rendererMode)
     else
         if self._loop then
-        self._loop:Stop()
-        self._loop = nil
-    end
-        pcall(function()
-            if self._provider then self._provider:Stop() end
-        end)
-        Logger:info("ESP disabled — objects cleaned up")
+            self._loop:Stop()
+            self._loop = nil
+        end
+        for _, rec in pairs(self._pool) do
+            destroyRecord(rec)
+        end
+        self._pool = {}
+        self._items = {}
+        removeInstance(self._folder)
+        self._folder = nil
+        self.enabled = false
+        self.rendererMode = nil
+        State.esp.enabled = false
+        self.stats = { total = 0, drawn = 0 }
+        Logger:info("ESP disabled — every object removed")
     end
     return true
 end
@@ -2951,6 +4242,21 @@ State.esp.categories = {
     Bosses    = false,
     QuestNPCs = false,
     Items     = false,
+}
+
+State.esp.display = {
+    name      = true,
+    distance  = true,
+    health    = true,
+    box       = true,
+    tracer    = true,
+    highlight = true,
+}
+
+State.esp.colors = {
+    Players = Color3.fromRGB(80, 200, 120),
+    NPCs    = Color3.fromRGB(255, 170, 60),
+    Bosses  = Color3.fromRGB(230, 70, 70),
 }
 
 local HomeStats = {}
@@ -3065,10 +4371,16 @@ local function tickHome()
     setStat("kills", State.automation.kills)
     setStat("targets", #DiscoveryController.cache)
 
-        setText("game", string.format(
+        local gameSuffix = ""
+    if not State.gameVerified then
+        gameSuffix = " (unverified)"
+    elseif not GameProfile.DATA_READY then
+        gameSuffix = " (game data pending release)"
+    end
+    setText("game", string.format(
         "%s%s  ·  PlaceId %d",
         game.Name or "?",
-        State.gameVerified and "" or " (unverified)",
+        gameSuffix,
         game.PlaceId
     ))
     local level, currency = findPlayerData()
@@ -3091,6 +4403,19 @@ local function tickHome()
     end
     if target then
         taskLine = taskLine .. string.format("  ·  Target: %s", target.name)
+    end
+        if QuestController.active and not auto.enabled then
+        taskLine = "Quest: " .. (QuestController.state or "…")
+        if QuestController.objectiveText ~= "" then
+            taskLine = taskLine .. "  ·  " .. QuestController.objectiveText
+        end
+    end
+        if ClanController.enabled and not auto.enabled then
+        taskLine = string.format("Clan: %s  ·  %d reroll(s)",
+            ClanController.state or "…", ClanController.rerollCount)
+        if ClanController.currentClan ~= "" then
+            taskLine = taskLine .. "  ·  " .. ClanController.currentClan
+        end
     end
     setText("task", taskLine)
 
@@ -3274,7 +4599,11 @@ local function buildHome(window)
 
     local statusLine = "v" .. VERSION .. " · universal mode (GameProfile not set)"
     if State.gameVerified then
-        statusLine = "v" .. VERSION .. " · PS2 verified — game features active"
+        if GameProfile.DATA_READY then
+            statusLine = "v" .. VERSION .. " · PS2 verified — game features active"
+        else
+            statusLine = "v" .. VERSION .. " · PS2 detected — data pending, game features locked"
+        end
     elseif GameProfile.CONFIGURED then
         statusLine = "v" .. VERSION .. " · wrong game — universal features only"
     end
@@ -3409,6 +4738,23 @@ local function buildUniversal(window)
             end
         end,
     })
+
+        Elements.activeMethods = tab:CreateText({
+        name = "Active Methods",
+        text = "Walk: — · Fly: —",
+    })
+    local function refreshMethodsText()
+        if not Elements.activeMethods then return end
+        pcall(function()
+            Elements.activeMethods:Set(string.format(
+                "Walk: %s · Fly: %s",
+                State.character.walkResolved or "—",
+                State.character.flyResolved or "—"
+            ))
+        end)
+    end
+    CharacterController.onMethodChanged:Connect(refreshMethodsText)
+    refreshMethodsText()
 
     tab:CreateSection({ name = "Jumping" })
 
@@ -3574,7 +4920,7 @@ local function buildServer(window)
         end,
     })
 
-    tab:CreateSection({ name = "Hop Settings" })
+    tab:CreateSection({ name = "Filters" })
 
     tab:CreateDropdown({
         name = "Maximum Players",
@@ -3635,9 +4981,6 @@ local function buildServer(window)
     return tab
 end
 
-local LOCK_REASON_GAME = "Awaiting game profile — set PlaceId in GameProfile"
-local LOCK_REASON_QUEST = "Awaiting GameProfile.QUEST data"
-
 local function buildAutoFarm(window)
     local tab = window:CreateTab({ name = "Auto Farm" })
 
@@ -3666,11 +5009,11 @@ local function buildAutoFarm(window)
         name = "Farm Mode",
         options = { "Nearest", "Selected", "Boss", "Smart", "Quest" },
         value = "Nearest",
-        description = "Smart weighs distance, health and boss status",
+        description = "Smart weighs distance, health, boss status; Quest runs the quest loop",
         flag = "Auto_Mode",
         callback = function(option)
             if option == "Quest" and not AutomationController:isModeAvailable("Quest") then
-                Notify.toast("Quest mode", "Awaiting GameProfile.QUEST data")
+                Notify.toast("Quest mode", "Unlocks with the released game's data")
                 Logger:warn("Quest mode unavailable — staying on the previous mode")
                 if modeDropdown then
                     modeDropdown:Set(TargetManager.mode, true)
@@ -3828,44 +5171,81 @@ local function buildAutoFarm(window)
 
     tab:CreateSection({ name = "Quest" })
 
-    tab:CreateText({
+    Elements.questStatus = tab:CreateText({
         name = "Status",
-        text = "Quest automation unlocks once GameProfile.QUEST is filled "
-            .. "(containers, tags, giver patterns, objective sources).",
+        text = "Quest loop off",
     })
-    local loopToggle = tab:CreateToggle({
+    local lastQuestLine
+    Tracker.loop("quest.status", 1, function()
+        if not Elements.questStatus then return end
+        local line
+        if QuestController.active then
+            line = "Quest: " .. (QuestController.state or "…")
+            if QuestController.objectiveText ~= "" then
+                line = line .. "  ·  " .. QuestController.objectiveText
+            end
+        elseif not QuestController.isAvailable() then
+            line = "Quest off — " .. (GameDetector.gameLockReason() or "unavailable")
+        else
+            line = string.format("Quest loop off · %d giver(s) detected", #QuestController.givers)
+        end
+        if line ~= lastQuestLine then
+            lastQuestLine = line
+            pcall(function() Elements.questStatus:Set(line) end)
+        end
+    end)
+
+    local loopToggle
+    loopToggle = tab:CreateToggle({
         name = "Auto Quest Loop",
-        description = "Accept -> complete -> turn in -> repeat",
+        description = "Accept -> progress -> turn in -> repeat",
         flag = "Quest_Loop",
         callback = function(value)
-            Logger:debug("Quest loop requested: " .. tostring(value))
+            local ok = QuestController:setLoop(value)
+            if not ok and loopToggle then
+                loopToggle:Set(false, true)
+            end
         end,
     })
-    loopToggle:Lock(LOCK_REASON_QUEST)
     local questRow = tab:CreateGroup()
-    local acceptToggle = questRow:CreateToggle({
+    questRow:CreateToggle({
         name = "Auto Accept",
+        value = true,
         flag = "Quest_AutoAccept",
-        callback = function() end,
+        callback = function(value)
+            QuestController.autoAccept = value and true or false
+        end,
     })
-    acceptToggle:Lock(LOCK_REASON_QUEST)
-    local turnInToggle = questRow:CreateToggle({
+    questRow:CreateToggle({
         name = "Auto Turn-In",
+        value = true,
         flag = "Quest_AutoTurnIn",
-        callback = function() end,
+        callback = function(value)
+            QuestController.autoTurnIn = value and true or false
+        end,
     })
-    turnInToggle:Lock(LOCK_REASON_QUEST)
     tab:CreateButton({
         name = "Detect Quest System",
-        description = "Probes the current game and reports findings to the console",
+        description = "Scans the quest UI and quest givers now, reports to the console",
         callback = function()
             local quest, reason = QuestController:detectCurrentQuest()
+            local givers = QuestController:findQuestGivers()
+            Logger:info(string.format(
+                "Quest scan: %d giver(s), objective %s",
+                #givers,
+                quest and ("\"" .. tostring(quest.text) .. "\"") or (reason or "not found")
+            ))
+            for i, giver in ipairs(givers) do
+                if i <= 10 then
+                    Logger:info(string.format("  giver %02d: %s  path=%s", i, giver.name, giver.path))
+                end
+            end
             if quest then
-                Logger:info("Quest detected: " .. tostring(quest))
-                Notify.toast("Quest system", "Detected — see console")
+                Notify.toast("Quest system", "Objective: " .. tostring(quest.text))
             else
-                Logger:info("Quest detection: " .. tostring(reason))
-                Notify.toast("Quest system", reason or "not found")
+                Notify.toast("Quest system", #givers > 0
+                    and (#givers .. " giver(s) found, no objective UI")
+                    or (reason or "nothing detected"))
             end
         end,
     })
@@ -3903,35 +5283,188 @@ local function buildAutoFarm(window)
             .. "the target for 15 s.",
     })
 
-        if not GameDetector.shouldEnableGameFeatures() then
-        masterToggle:Lock(LOCK_REASON_GAME)
+            local lockReason = GameDetector.gameLockReason()
+    if lockReason then
+        masterToggle:Lock(lockReason)
+        loopToggle:Lock(lockReason)
     end
 
     return tab
 end
 
-local LOCK_REASON_ESP = "Awaiting ESP source integration"
+local CLAN_STATE_TEXT = {
+    TargetReached  = "Target clan reached",
+    LimitReached   = "Reroll limit reached",
+    WaitingRespawn = "Waiting for respawn",
+}
+
+local function buildClan(window)
+    local tab = window:CreateTab({ name = "Clan" })
+
+    tab:CreateSection({ name = "Clan Reroll" })
+
+    Elements.clanStatus = tab:CreateText({
+        name = "Status",
+        text = GameDetector.gameLockReason() or "Clan reroll off",
+    })
+
+    local lastClanLine
+    local clanUiOn = false
+    Tracker.loop("clan.status", 1, function()
+        if not Elements.clanStatus then return end
+        local line
+        if ClanController.enabled then
+            line = string.format("%s · %d reroll(s)",
+                ClanController.state or "…", ClanController.rerollCount)
+            if ClanController.currentClan ~= "" then
+                line = line .. " · " .. ClanController.currentClan
+            end
+        else
+            local why = GameDetector.gameLockReason()
+            if why and not ClanController.isAvailable() then
+                line = why
+            elseif ClanController.state ~= "Idle" then
+                line = CLAN_STATE_TEXT[ClanController.state] or ClanController.state
+            else
+                line = "Clan reroll off"
+            end
+        end
+        if line ~= lastClanLine then
+            lastClanLine = line
+            pcall(function() Elements.clanStatus:Set(line) end)
+        end
+        if Elements.statRerolls and Elements.statRerolls.value ~= ClanController.rerollCount then
+            pcall(function() Elements.statRerolls:Set(ClanController.rerollCount) end)
+        end
+        if Elements.clanToggle and clanUiOn ~= ClanController.enabled then
+            clanUiOn = ClanController.enabled
+            pcall(function() Elements.clanToggle:Set(clanUiOn, true) end)
+        end
+    end)
+
+    local clanToggle
+    clanToggle = tab:CreateToggle({
+        name = "Auto Reroll",
+        description = "Rerolls until the target clan or the reroll limit",
+        flag = "Clan_Auto",
+        callback = function(value)
+            if value then
+                local ok = ClanController:setEnabled(true)
+                if not ok and clanToggle then
+                    clanToggle:Set(false, true)
+                end
+            else
+                ClanController:setEnabled(false)
+            end
+        end,
+    })
+    Elements.clanToggle = clanToggle
+
+    tab:CreateDropdown({
+        name = "Stop Mode",
+        options = { "Fixed Count", "Until Target Clan" },
+        value = "Fixed Count",
+        flag = "Clan_Mode",
+        callback = function(option)
+            ClanController.mode = option == "Until Target Clan" and "UntilTarget" or "Count"
+        end,
+    })
+
+    tab:CreateInput({
+        name = "Target Clan",
+        placeholder = "Clan name (case-insensitive)",
+        flag = "Clan_Target",
+        callback = function(text)
+            ClanController.targetClan = Util.trim(tostring(text or ""))
+        end,
+    })
+
+    local clanRow = tab:CreateGroup()
+    clanRow:CreateSlider({
+        name = "Max Rerolls",
+        range = { 1, 200 },
+        value = 10,
+        flag = "Clan_Max",
+        callback = function(value)
+            ClanController.maxRerolls = value
+        end,
+    })
+    local rerollButton
+    rerollButton = clanRow:CreateButton({
+        name = "Reroll Once",
+        description = "Fires the reroll right now (no walking)",
+        callback = function()
+            local ok, msg = ClanController:rerollOnce()
+            if ok then
+                Notify.toast("Clan", string.format("Reroll fired (%d total)", ClanController.rerollCount))
+            else
+                Notify.toast("Clan", msg or "Reroll failed")
+            end
+        end,
+    })
+
+    local clanRow2 = tab:CreateGroup()
+    clanRow2:CreateSlider({
+        name = "Reroll Delay",
+        range = { 0.5, 10 },
+        increment = 0.5,
+        value = 1.5,
+        suffix = " s",
+        flag = "Clan_Delay",
+        callback = function(value)
+            ClanController.delay = value
+        end,
+    })
+    Elements.statRerolls = clanRow2:CreateStat({ name = "Rerolls", value = 0 })
+
+        local clanLockReason = GameDetector.gameLockReason()
+    if clanLockReason then
+        clanToggle:Lock(clanLockReason)
+        rerollButton:Lock(clanLockReason)
+    end
+
+    return tab
+end
 
 local function buildESP(window)
     local tab = window:CreateTab({ name = "ESP" })
 
     tab:CreateSection({ name = "ESP" })
 
-    tab:CreateText({
+    Elements.espStatus = tab:CreateText({
         name = "Status",
-        text = "Scaffold — the pipeline (categories, settings, update loop, "
-            .. "cleanup) is wired but renders nothing until an ESP source "
-            .. "is integrated. Nothing pretends to work.",
+        text = "ESP off",
     })
 
-    local espMaster = tab:CreateToggle({
+    tab:CreateToggle({
         name = "Enable ESP",
+        description = "Drawing renderer when the executor supports it, Highlight mode otherwise",
         flag = "ESP_Master",
         callback = function(value)
             ESPController:setEnabled(value)
         end,
     })
-    espMaster:Lock(LOCK_REASON_ESP)
+
+    local lastEspLine
+    Tracker.loop("esp.status", 2, function()
+        if not Elements.espStatus then return end
+        local line
+        if ESPController.enabled then
+            line = string.format(
+                "Renderer: %s · %d/%d shown · %d ms rate",
+                ESPController.rendererMode or "?",
+                ESPController.stats.drawn or 0,
+                ESPController.stats.total or 0,
+                math.floor((State.intervals.espUpdate or 0.1) * 1000)
+            )
+        else
+            line = "ESP off"
+        end
+        if line ~= lastEspLine then
+            lastEspLine = line
+            pcall(function() Elements.espStatus:Set(line) end)
+        end
+    end)
 
     tab:CreateSection({ name = "Categories" })
 
@@ -3939,33 +5472,33 @@ local function buildESP(window)
         { id = "Players",   flag = "ESP_Cat_Players",   help = "All players" },
         { id = "NPCs",      flag = "ESP_Cat_NPCs",      help = "Discovery cache NPCs" },
         { id = "Bosses",    flag = "ESP_Cat_Bosses",    help = "Boss-class targets" },
-        { id = "QuestNPCs", flag = "ESP_Cat_Quest",     help = "Quest givers (once known)" },
-        { id = "Items",     flag = "ESP_Cat_Items",     help = "Drops and items (once known)" },
+        { id = "QuestNPCs", flag = "ESP_Cat_Quest",     help = "Detected quest givers" },
+        { id = "Items",     flag = "ESP_Cat_Items",     help = "Generic pickup scan (drops, chests, ore)" },
     }
     local catRowA = tab:CreateGroup()
     local catRowB = tab:CreateGroup()
     for index, cat in ipairs(categories) do
         local row = index <= 3 and catRowA or catRowB
-        local toggle = row:CreateToggle({
+        row:CreateToggle({
             name = cat.id,
             description = cat.help,
             flag = cat.flag,
             callback = function(value)
-                State.esp.categories[cat.id] = value
+                State.esp.categories[cat.id] = value and true or false
             end,
         })
-        toggle:Lock(LOCK_REASON_ESP)
     end
 
     tab:CreateSection({ name = "Display" })
 
+    local hasDrawing = type(Drawing) == "table" and type(Drawing.new) == "function"
     local display = {
-        { label = "Name",      flag = "ESP_Show_Name" },
-        { label = "Distance",  flag = "ESP_Show_Distance" },
-        { label = "Health",    flag = "ESP_Show_Health" },
-        { label = "Box",       flag = "ESP_Show_Box" },
-        { label = "Tracer",    flag = "ESP_Show_Tracer" },
-        { label = "Highlight", flag = "ESP_Show_Highlight" },
+        { label = "Name",      key = "name",      flag = "ESP_Show_Name" },
+        { label = "Distance",  key = "distance",  flag = "ESP_Show_Distance" },
+        { label = "Health",    key = "health",    flag = "ESP_Show_Health" },
+        { label = "Box",       key = "box",       flag = "ESP_Show_Box",    drawing = true },
+        { label = "Tracer",    key = "tracer",    flag = "ESP_Show_Tracer", drawing = true },
+        { label = "Highlight", key = "highlight", flag = "ESP_Show_Highlight" },
     }
     local dispRowA = tab:CreateGroup()
     local dispRowB = tab:CreateGroup()
@@ -3973,13 +5506,15 @@ local function buildESP(window)
         local row = index <= 3 and dispRowA or dispRowB
         local toggle = row:CreateToggle({
             name = option.label,
+            value = true,
             flag = option.flag,
             callback = function(value)
-                State.esp.display = State.esp.display or {}
-                State.esp.display[option.flag] = value
+                State.esp.display[option.key] = value and true or false
             end,
         })
-        toggle:Lock(LOCK_REASON_ESP)
+        if option.drawing and not hasDrawing then
+            toggle:Lock("Needs the Drawing API — this executor renders Highlight mode")
+        end
     end
 
     tab:CreateSection({ name = "Visuals" })
@@ -3990,20 +5525,18 @@ local function buildESP(window)
         { label = "Boss Color",   key = "Bosses",  color = Color3.fromRGB(230, 70, 70),    flag = "ESP_Color_Bosses" },
     }
     for _, def in ipairs(colorDefs) do
-        local picker = tab:CreateColorPicker({
+        tab:CreateColorPicker({
             name = def.label,
             color = def.color,
             flag = def.flag,
             callback = function(color)
-                State.esp.colors = State.esp.colors or {}
                 State.esp.colors[def.key] = color
             end,
         })
-        picker:Lock(LOCK_REASON_ESP)
     end
 
     local espSliders = tab:CreateGroup()
-    local updateRate = espSliders:CreateSlider({
+    espSliders:CreateSlider({
         name = "Update Rate",
         range = { 0.05, 1 },
         increment = 0.05,
@@ -4012,10 +5545,10 @@ local function buildESP(window)
         flag = "ESP_UpdateRate",
         callback = function(value)
             ESPController.settings.updateRate = value
+            State.intervals.espUpdate = value
         end,
     })
-    updateRate:Lock(LOCK_REASON_ESP)
-    local maxDistance = espSliders:CreateSlider({
+    espSliders:CreateSlider({
         name = "Max Distance",
         range = { 100, 5000 },
         increment = 50,
@@ -4026,7 +5559,6 @@ local function buildESP(window)
             ESPController.settings.maxDistance = value
         end,
     })
-    maxDistance:Lock(LOCK_REASON_ESP)
 
     return tab
 end
@@ -4347,9 +5879,13 @@ function UI.createWindow()
         order = 1,
     })
     Elements.gameTag = window:CreateTag({
-        text = State.gameVerified and "PS2" or "UNVERIFIED",
+        text = State.gameVerified
+            and (GameProfile.DATA_READY and "PS2" or "PS2 · AWAITING DATA")
+            or "UNVERIFIED",
         color = State.gameVerified
-            and Color3.fromRGB(70, 180, 110)
+            and (GameProfile.DATA_READY
+                and Color3.fromRGB(70, 180, 110)
+                or Color3.fromRGB(235, 140, 50))
             or Color3.fromRGB(235, 140, 50),
         order = 2,
     })
@@ -4360,6 +5896,7 @@ function UI.buildTabs(window)
         buildHome(window)
     buildUniversal(window)
     buildAutoFarm(window)
+    buildClan(window)
     buildESP(window)
     buildServer(window)
     buildSettings(window)
@@ -4405,6 +5942,8 @@ function Emergency.stop()
     Logger:warn("EMERGENCY STOP — killing all active features")
     AutomationController:stop()
     syncAutomationToggle(false)
+    QuestController:stop()
+    ClanController:stop()
     ESPController:setEnabled(false)
     CharacterController:stopAll()
     MovementController:cancel("emergency stop")
@@ -4494,6 +6033,7 @@ local function registerModules()
     ModuleManager.register("InteractionController", InteractionController)
     ModuleManager.register("AutomationController", AutomationController)
     ModuleManager.register("QuestController", QuestController)
+    ModuleManager.register("ClanController", ClanController)
     ModuleManager.register("ESPController", ESPController)
     ModuleManager.register("HomeStats", HomeStats)
     ModuleManager.register("ConfigController", ConfigController)
@@ -4542,12 +6082,17 @@ local function main()
         "Game: %s (%s) — PS2 features %s",
         game.Name or "?",
         GameDetector.reason,
-        State.gameVerified and "UNLOCKED" or "LOCKED"
+        GameDetector.shouldEnableGameFeatures() and "UNLOCKED" or ("LOCKED (" .. (GameDetector.gameLockReason() or "?") .. ")")
     ))
     Logger:info("Tip: Debug tab -> 'Dump Discovered Targets' fills GameProfile")
 
-    if State.gameVerified then
+    if GameDetector.shouldEnableGameFeatures() then
         Notify.notify("Project loaded", PROJECT_NAME .. " v" .. VERSION .. " — game verified, automation ready.")
+    elseif State.gameVerified then
+        Notify.notify("Project loaded", PROJECT_NAME .. " v" .. VERSION
+            .. " — Slayers 2 detected. Game-specific features (auto farm, "
+            .. "quests, clan reroll) stay locked until the game releases and "
+            .. "its instance data is provided.")
     elseif GameProfile.CONFIGURED then
         Notify.notify("Wrong game detected", "Universal features work; PS2 automation stays locked.")
     else
