@@ -464,7 +464,6 @@ local State = {
         flyResolved      = "—",
         noclip           = false,
     },
-    uptime     = os.clock(),
 }
 
 State.intervals = {
@@ -3063,9 +3062,7 @@ local function tickHome()
     local info = ServerController:getInfo()
     setStat("players", info.players)
     setStat("ping", info.ping or 0)
-    setStat("uptime", math.floor(os.clock() - State.uptime))
     setStat("kills", State.automation.kills)
-    setStat("interactions", State.automation.interactions)
     setStat("targets", #DiscoveryController.cache)
 
         setText("game", string.format(
@@ -3097,20 +3094,13 @@ local function tickHome()
     end
     setText("task", taskLine)
 
-        local methodLine = string.format(
-        "Walk: %s  ·  Fly: %s  ·  Move: %s  ·  Interact: %s",
-        CharacterController.walk.resolved or (CharacterController.walk.enabled and "…" or "off"),
-        CharacterController.fly.resolved or (CharacterController.fly.enabled and "…" or "off"),
-        MovementController.resolved or "—",
-        InteractionController.mode
-    )
-    setText("methods", methodLine)
-
         if target and target.humanoid and target.humanoid.Parent then
         local maxHealth = math.max(1, target.humanoid.MaxHealth)
         setProgress("value", Util.round(target.humanoid.Health / maxHealth * 100, 1))
     elseif auto.enabled then
         setProgress("indeterminate")
+    else
+        setProgress("value", 0)
     end
 end
 
@@ -3268,17 +3258,6 @@ local function syncAutomationToggle(value)
     end
 end
 
-local function startAutomationFromUI()
-    local ok = AutomationController:start()
-    syncAutomationToggle(ok)
-    return ok
-end
-
-local function stopAutomationFromUI()
-    AutomationController:stop()
-    syncAutomationToggle(false)
-end
-
 local function buildHome(window)
     local tab = window:CreateTab({ name = "Home" })
 
@@ -3293,91 +3272,36 @@ local function buildHome(window)
         text = LocalPlayer.Name,
     })
 
+    local statusLine = "v" .. VERSION .. " · universal mode (GameProfile not set)"
+    if State.gameVerified then
+        statusLine = "v" .. VERSION .. " · PS2 verified — game features active"
+    elseif GameProfile.CONFIGURED then
+        statusLine = "v" .. VERSION .. " · wrong game — universal features only"
+    end
+    tab:CreateText({
+        name = "Status",
+        text = statusLine,
+    })
+
     local grid = tab:CreateGroup()
     local left = grid:CreateGroup({ direction = "column" })
     local right = grid:CreateGroup({ direction = "column" })
 
     Elements.statPlayers = left:CreateStat({ name = "Server Players", value = 0 })
     Elements.statPing = left:CreateStat({ name = "Ping", value = 0, suffix = " ms" })
-    Elements.statUptime = left:CreateStat({ name = "Uptime", value = 0, suffix = " s" })
-
     Elements.statTargets = right:CreateStat({ name = "Targets Found", value = 0 })
     Elements.statKills = right:CreateStat({ name = "Kills", value = 0 })
-    Elements.statInteractions = right:CreateStat({ name = "Interactions", value = 0 })
 
-    tab:CreateSection({ name = "Automation Status" })
+    tab:CreateSection({ name = "Activity" })
 
     Elements.homeTask = tab:CreateText({
         name = "Task",
         text = "Idle — automation off",
     })
-    Elements.homeMethods = tab:CreateText({
-        name = "Active Methods",
-        text = "Walk: off · Fly: off · Move: — · Interact: Auto",
-    })
-
     Elements.homeProgress = tab:CreateProgress({
         name = "Target Health",
         range = { 0, 100 },
         value = 0,
-    })
-
-    tab:CreateSection({ name = "Quick Controls" })
-
-    local startRow = tab:CreateGroup()
-    startRow:CreateButton({
-        name = "Start Automation",
-        description = "Begin the farm loop with the current mode",
-        callback = function()
-            startAutomationFromUI()
-        end,
-    })
-    startRow:CreateButton({
-        name = "Stop Automation",
-        description = "Stop the loop cleanly (movement cancels, state resets)",
-        callback = function()
-            stopAutomationFromUI()
-        end,
-    })
-
-    tab:CreateDivider({ text = "server" })
-
-    local serverRow = tab:CreateGroup()
-    serverRow:CreateButton({
-        name = "Rejoin",
-        callback = function()
-            ServerController:rejoin()
-        end,
-    })
-    serverRow:CreateButton({
-        name = "Server Hop",
-        callback = function()
-            ServerController:hop("any")
-        end,
-    })
-    serverRow:CreateButton({
-        name = "Low Server Hop",
-        callback = function()
-            ServerController:hop("low", UIState.lowHopMax())
-        end,
-    })
-
-    tab:CreateButton({
-        name = "Emergency Stop",
-        description = "Kills every active feature instantly (automation, fly, noclip, speed)",
-        callback = function()
-            Emergency.stop()
-        end,
-    })
-
-    tab:CreateKeybind({
-        name = "Emergency Stop Keybind",
-        description = "Global panic key — works regardless of the tab you are on",
-        value = Enum.KeyCode.P,
-        flag = "Home_EmergencyKey",
-        callback = function()
-            Emergency.stop()
-        end,
     })
 
     return tab
@@ -3386,17 +3310,33 @@ end
 local function buildUniversal(window)
     local tab = window:CreateTab({ name = "Universal" })
 
-    tab:CreateSection({ name = "Walk Speed" })
+    tab:CreateSection({ name = "Movement" })
 
-    tab:CreateToggle({
-        name = "Enable Walk Speed",
-        description = "Two real methods: property override or physics velocity",
+    local moveRow = tab:CreateGroup()
+    moveRow:CreateToggle({
+        name = "Walk Speed",
         flag = "Univ_WalkSpeed_Enabled",
         callback = function(value)
             CharacterController:setWalkEnabled(value)
         end,
     })
-    tab:CreateSlider({
+    local flyToggle = moveRow:CreateToggle({
+        name = "Fly",
+        flag = "Univ_Fly_Enabled",
+        callback = function(value)
+            CharacterController:setFlyEnabled(value)
+        end,
+    })
+    local noclipToggle = moveRow:CreateToggle({
+        name = "Noclip",
+        flag = "Univ_Noclip",
+        callback = function(value)
+            CharacterController:setNoclip(value)
+        end,
+    })
+
+    local speedRow = tab:CreateGroup()
+    speedRow:CreateSlider({
         name = "Speed",
         range = { 16, 500 },
         increment = 1,
@@ -3407,6 +3347,17 @@ local function buildUniversal(window)
             CharacterController:setWalkSpeed(value)
         end,
     })
+    speedRow:CreateSlider({
+        name = "Fly Speed",
+        range = { 1, 500 },
+        value = 60,
+        suffix = " sps",
+        flag = "Univ_Fly_Speed",
+        callback = function(value)
+            CharacterController:setFlySpeed(value)
+        end,
+    })
+
     tab:CreateDropdown({
         name = "Walk Speed Method",
         options = { "Auto", "Humanoid (Property)", "Velocity (Physics)" },
@@ -3423,71 +3374,6 @@ local function buildUniversal(window)
             end
         end,
     })
-
-    tab:CreateSection({ name = "Jump" })
-
-    tab:CreateToggle({
-        name = "Modify Jump",
-        description = "Applies the mode the game's Humanoid actually uses (auto-detected)",
-        flag = "Univ_Jump_Enabled",
-        callback = function(value)
-            CharacterController:setJumpEnabled(value)
-        end,
-    })
-    tab:CreateSlider({
-        name = "JumpPower",
-        description = "Used when Humanoid.UseJumpPower is true",
-        range = { 1, 500 },
-        value = 50,
-        flag = "Univ_JumpPower",
-        callback = function(value)
-            CharacterController:setJumpPower(value)
-        end,
-    })
-    tab:CreateSlider({
-        name = "JumpHeight",
-        description = "Used when the game uses JumpHeight instead",
-        range = { 1, 100 },
-        increment = 0.5,
-        value = 7.5,
-        suffix = " studs",
-        flag = "Univ_JumpHeight",
-        callback = function(value)
-            CharacterController:setJumpHeight(value)
-        end,
-    })
-
-    tab:CreateSection({ name = "Infinite Jump" })
-
-    tab:CreateToggle({
-        name = "Infinite Jump",
-        flag = "Univ_InfJump",
-        callback = function(value)
-            CharacterController:setInfiniteJump(value)
-        end,
-    })
-
-    tab:CreateSection({ name = "Fly" })
-
-    local flyToggle
-    flyToggle = tab:CreateToggle({
-        name = "Enable Fly",
-        description = "E/Q or Space/LeftControl for vertical, WASD to move",
-        flag = "Univ_Fly_Enabled",
-        callback = function(value)
-            CharacterController:setFlyEnabled(value)
-        end,
-    })
-    tab:CreateSlider({
-        name = "Fly Speed",
-        range = { 1, 500 },
-        value = 60,
-        suffix = " sps",
-        flag = "Univ_Fly_Speed",
-        callback = function(value)
-            CharacterController:setFlySpeed(value)
-        end,
-    })
     tab:CreateDropdown({
         name = "Fly Method",
         options = { "Auto", "CFrame", "BodyVelocity", "LinearVelocity" },
@@ -3499,7 +3385,8 @@ local function buildUniversal(window)
         end,
     })
     tab:CreateKeybind({
-        name = "Fly Toggle Keybind",
+        name = "Fly Key",
+        description = "WASD to move, E/Q or Space/LeftControl for vertical",
         value = Enum.KeyCode.F,
         flag = "Univ_Fly_Key",
         callback = function()
@@ -3510,19 +3397,8 @@ local function buildUniversal(window)
             end
         end,
     })
-
-    tab:CreateSection({ name = "Noclip" })
-
-    local noclipToggle
-    noclipToggle = tab:CreateToggle({
-        name = "Noclip",
-        flag = "Univ_Noclip",
-        callback = function(value)
-            CharacterController:setNoclip(value)
-        end,
-    })
     tab:CreateKeybind({
-        name = "Noclip Toggle Keybind",
+        name = "Noclip Key",
         value = Enum.KeyCode.N,
         flag = "Univ_Noclip_Key",
         callback = function()
@@ -3534,7 +3410,48 @@ local function buildUniversal(window)
         end,
     })
 
-    tab:CreateSection({ name = "Character" })
+    tab:CreateSection({ name = "Jumping" })
+
+    local jumpRow = tab:CreateGroup()
+    jumpRow:CreateToggle({
+        name = "Modify Jump",
+        description = "Applies the mode the game's Humanoid actually uses (auto-detected)",
+        flag = "Univ_Jump_Enabled",
+        callback = function(value)
+            CharacterController:setJumpEnabled(value)
+        end,
+    })
+    jumpRow:CreateToggle({
+        name = "Infinite Jump",
+        flag = "Univ_InfJump",
+        callback = function(value)
+            CharacterController:setInfiniteJump(value)
+        end,
+    })
+
+    local jumpSliders = tab:CreateGroup()
+    jumpSliders:CreateSlider({
+        name = "JumpPower",
+        range = { 1, 500 },
+        value = 50,
+        flag = "Univ_JumpPower",
+        callback = function(value)
+            CharacterController:setJumpPower(value)
+        end,
+    })
+    jumpSliders:CreateSlider({
+        name = "JumpHeight",
+        range = { 1, 100 },
+        increment = 0.5,
+        value = 7.5,
+        suffix = " studs",
+        flag = "Univ_JumpHeight",
+        callback = function(value)
+            CharacterController:setJumpHeight(value)
+        end,
+    })
+
+    tab:CreateSection({ name = "Character & Camera" })
 
     tab:CreateToggle({
         name = "Anti-AFK",
@@ -3544,35 +3461,6 @@ local function buildUniversal(window)
             CharacterController:setAntiAFK(value)
         end,
     })
-
-    local charRow = tab:CreateGroup()
-    charRow:CreateButton({
-        name = "Reset Character",
-        callback = function()
-            CharacterController:resetCharacter()
-        end,
-    })
-    charRow:CreateButton({
-        name = "Rejoin",
-        callback = function()
-            ServerController:rejoin()
-        end,
-    })
-    charRow:CreateButton({
-        name = "Server Hop",
-        callback = function()
-            ServerController:hop("any")
-        end,
-    })
-    charRow:CreateButton({
-        name = "Low Hop",
-        callback = function()
-            ServerController:hop("low", UIState.lowHopMax())
-        end,
-    })
-
-    tab:CreateSection({ name = "Camera" })
-
     Elements.fovSlider = tab:CreateSlider({
         name = "Field of View",
         range = { 30, 120 },
@@ -3585,7 +3473,14 @@ local function buildUniversal(window)
             CharacterController:setFOV(value)
         end,
     })
-    tab:CreateButton({
+    local utilRow = tab:CreateGroup()
+    utilRow:CreateButton({
+        name = "Reset Character",
+        callback = function()
+            CharacterController:resetCharacter()
+        end,
+    })
+    utilRow:CreateButton({
         name = "Reset FOV",
         callback = function()
             CharacterController:resetFOV()
@@ -3595,40 +3490,15 @@ local function buildUniversal(window)
         end,
     })
 
-    return tab
-end
+    tab:CreateSection({ name = "Players" })
 
-local function buildPlayers(window)
-    local tab = window:CreateTab({ name = "Players" })
-
-    tab:CreateSection({ name = "Player List" })
-
-    local playerDropdown = tab:CreateDropdown({
+    Elements.playerDropdown = tab:CreateDropdown({
         name = "Select Player",
         options = PlayerController.getPlayerNames(),
         placeholder = "None",
-        description = "Type to search — the list refreshes on join/leave",
+        description = "Type to search — refreshes on join/leave",
         forgetState = true,
     })
-    Elements.playerDropdown = playerDropdown
-
-    tab:CreateButton({
-        name = "Refresh List",
-        callback = function()
-            PlayerController:refreshList()
-        end,
-    })
-    tab:CreateToggle({
-        name = "Auto-Refresh On Join / Leave",
-        description = "On by default — the list tracks membership without polling",
-        value = true,
-        flag = "Players_AutoRefresh",
-        callback = function(value)
-            UIState.autoRefreshPlayers = value and true or false
-        end,
-    })
-
-    tab:CreateSection({ name = "Teleport" })
 
     local tpRow = tab:CreateGroup()
     tpRow:CreateButton({
@@ -3639,34 +3509,38 @@ local function buildPlayers(window)
         end,
     })
     tpRow:CreateButton({
-        name = "Teleport Behind",
+        name = "Behind",
         callback = function()
             local name = UIState.dropdownFirst(Elements.playerDropdown)
             if name then PlayerController:teleportTo(name, "behind") end
         end,
     })
     tpRow:CreateButton({
-        name = "Teleport Above",
+        name = "Above",
         callback = function()
             local name = UIState.dropdownFirst(Elements.playerDropdown)
             if name then PlayerController:teleportTo(name, "above") end
         end,
     })
 
-    tab:CreateSection({ name = "Spectate" })
-
-    local specRow = tab:CreateGroup()
-    specRow:CreateButton({
+    local viewRow = tab:CreateGroup()
+    viewRow:CreateButton({
         name = "Spectate",
         callback = function()
             local name = UIState.dropdownFirst(Elements.playerDropdown)
             if name then PlayerController:spectate(name) end
         end,
     })
-    specRow:CreateButton({
-        name = "Stop Spectating",
+    viewRow:CreateButton({
+        name = "Stop Spectate",
         callback = function()
             PlayerController:stopSpectate()
+        end,
+    })
+    viewRow:CreateButton({
+        name = "Refresh List",
+        callback = function()
+            PlayerController:refreshList()
         end,
     })
 
@@ -3676,63 +3550,43 @@ end
 local function buildServer(window)
     local tab = window:CreateTab({ name = "Server" })
 
-    tab:CreateSection({ name = "Information" })
+    tab:CreateSection({ name = "Server Actions" })
 
-    Elements.serverJobId = tab:CreateText({
-        name = "Job ID",
-        text = game.JobId ~= "" and game.JobId or "(Studio)",
+    local actionsRow = tab:CreateGroup()
+    actionsRow:CreateButton({
+        name = "Rejoin",
+        callback = function()
+            ServerController:rejoin()
+        end,
     })
-    Elements.serverPlaceId = tab:CreateText({
-        name = "Place ID",
-        text = tostring(game.PlaceId),
-    })
-    Elements.serverInfo = tab:CreateText({
-        name = "Live",
-        text = "…",
-    })
-
-    tab:CreateSection({ name = "Server Hop" })
-
-    tab:CreateButton({
+    actionsRow:CreateButton({
         name = "Server Hop",
         description = "Skips servers you already visited this session",
         callback = function()
             ServerController:hop("any")
         end,
     })
-    tab:CreateSlider({
-        name = "Hop Cooldown",
-        range = { 5, 60 },
-        value = 5,
-        suffix = " s",
-        flag = "Server_Cooldown",
-        callback = function(value)
-            ServerController.COOLDOWN = value
-        end,
-    })
-    tab:CreateToggle({
-        name = "Remember Visited Servers",
-        description = "Persists the visited list to disk when the executor allows it",
-        value = true,
-        flag = "Server_RememberVisited",
-        callback = function(value)
-            State.settings.rememberVisitedServers = value and true or false
+    actionsRow:CreateButton({
+        name = "Low Hop",
+        description = "Only servers at or below the player filter",
+        callback = function()
+            ServerController:hop("low", UIState.lowHopMax())
         end,
     })
 
-    tab:CreateSection({ name = "Low Server Hop" })
+    tab:CreateSection({ name = "Hop Settings" })
 
     tab:CreateDropdown({
         name = "Maximum Players",
         options = { "1", "2", "3", "4", "5", "6", "Custom" },
         value = "3",
-        description = "Only servers at or below this count are accepted",
+        description = "Low Hop only accepts servers at or below this count",
         flag = "Server_LowMax",
         callback = function(option)
             UIState.lowHopMode = option
         end,
     })
-    Elements.lowHopCustom = tab:CreateInput({
+    tab:CreateInput({
         name = "Custom Maximum Players",
         numeric = true,
         value = "8",
@@ -3742,32 +3596,52 @@ local function buildServer(window)
             UIState.lowHopCustomValue = tonumber(text) or 8
         end,
     })
-
-    tab:CreateButton({
-        name = "Low Server Hop",
-        callback = function()
-            ServerController:hop("low", UIState.lowHopMax())
+    local hopRow = tab:CreateGroup()
+    hopRow:CreateSlider({
+        name = "Hop Cooldown",
+        range = { 5, 60 },
+        value = 5,
+        suffix = " s",
+        flag = "Server_Cooldown",
+        callback = function(value)
+            ServerController.COOLDOWN = value
+        end,
+    })
+    hopRow:CreateToggle({
+        name = "Remember Visited",
+        description = "Persists the visited list to disk when the executor allows it",
+        value = true,
+        flag = "Server_RememberVisited",
+        callback = function(value)
+            State.settings.rememberVisitedServers = value and true or false
         end,
     })
 
-    tab:CreateSection({ name = "Rejoin" })
+    tab:CreateSection({ name = "Information" })
 
-    tab:CreateButton({
-        name = "Rejoin",
-        callback = function()
-            ServerController:rejoin()
-        end,
+    tab:CreateText({
+        name = "Identity",
+        text = string.format(
+            "JobId %s  ·  PlaceId %d",
+            game.JobId ~= "" and game.JobId:sub(1, 12) .. "…" or "(Studio)",
+            game.PlaceId
+        ),
+    })
+    Elements.serverInfo = tab:CreateText({
+        name = "Live",
+        text = "…",
     })
 
     return tab
 end
 
 local LOCK_REASON_GAME = "Awaiting game profile — set PlaceId in GameProfile"
+local LOCK_REASON_QUEST = "Awaiting GameProfile.QUEST data"
 
-local function buildAutomation(window)
-    local tab = window:CreateTab({ name = "Automation" })
+local function buildAutoFarm(window)
+    local tab = window:CreateTab({ name = "Auto Farm" })
 
-    tab:CreateSection({ name = "Main" })
+    tab:CreateSection({ name = "Automation" })
 
     local masterToggle
     masterToggle = tab:CreateToggle({
@@ -3789,7 +3663,7 @@ local function buildAutomation(window)
 
     local modeDropdown
     modeDropdown = tab:CreateDropdown({
-        name = "Automation Mode",
+        name = "Farm Mode",
         options = { "Nearest", "Selected", "Boss", "Smart", "Quest" },
         value = "Nearest",
         description = "Smart weighs distance, health and boss status",
@@ -3838,16 +3712,9 @@ local function buildAutomation(window)
     })
     Elements.excludeDropdown = excludeDropdown
 
-    tab:CreateButton({
-        name = "Refresh Target List",
-        callback = function()
-            UI.refreshTargetDropdowns()
-            Notify.toast("Targets", DiscoveryController.lastSummary)
-        end,
-    })
-
-    tab:CreateSlider({
-        name = "Target Max Range",
+    local targetRow = tab:CreateGroup()
+    targetRow:CreateSlider({
+        name = "Max Range",
         range = { 100, 10000 },
         increment = 50,
         value = 2000,
@@ -3855,6 +3722,13 @@ local function buildAutomation(window)
         flag = "Auto_MaxRange",
         callback = function(value)
             TargetManager:setMaxRange(value)
+        end,
+    })
+    targetRow:CreateButton({
+        name = "Refresh",
+        callback = function()
+            UI.refreshTargetDropdowns()
+            Notify.toast("Targets", DiscoveryController.lastSummary)
         end,
     })
 
@@ -3872,7 +3746,8 @@ local function buildAutomation(window)
             Logger:debug("Movement method set: " .. option)
         end,
     })
-    tab:CreateSlider({
+    local moveRow = tab:CreateGroup()
+    moveRow:CreateSlider({
         name = "Movement Speed",
         description = "Used by the Tween and CFrame methods",
         range = { 5, 300 },
@@ -3883,9 +3758,8 @@ local function buildAutomation(window)
             MovementController.speed = value
         end,
     })
-    tab:CreateSlider({
+    moveRow:CreateSlider({
         name = "Arrival Range",
-        description = "Distance considered 'in range' of the target",
         range = { 2, 20 },
         increment = 0.5,
         value = 4,
@@ -3908,7 +3782,8 @@ local function buildAutomation(window)
             InteractionController.mode = option
         end,
     })
-    tab:CreateSlider({
+    local interRow = tab:CreateGroup()
+    interRow:CreateSlider({
         name = "Interaction Delay",
         range = { 0.1, 5 },
         increment = 0.1,
@@ -3919,7 +3794,7 @@ local function buildAutomation(window)
             InteractionController.delay = value
         end,
     })
-    tab:CreateSlider({
+    interRow:CreateSlider({
         name = "Interaction Range",
         range = { 4, 40 },
         value = 10,
@@ -3929,8 +3804,9 @@ local function buildAutomation(window)
             InteractionController.range = value
         end,
     })
-    tab:CreateToggle({
-        name = "Auto Attack (Tool)",
+    local attackRow = tab:CreateGroup()
+    attackRow:CreateToggle({
+        name = "Auto Attack",
         description = "Activates the equipped combat tool on cadence",
         value = true,
         flag = "Auto_Attack",
@@ -3938,7 +3814,7 @@ local function buildAutomation(window)
             InteractionController.autoAttack = value
         end,
     })
-    tab:CreateSlider({
+    attackRow:CreateSlider({
         name = "Attack Interval",
         range = { 0.1, 2 },
         increment = 0.05,
@@ -3950,15 +3826,81 @@ local function buildAutomation(window)
         end,
     })
 
-    tab:CreateDivider()
-
-    tab:CreateSection({ name = "Recovery Behavior" })
+    tab:CreateSection({ name = "Quest" })
 
     tab:CreateText({
-        name = "Built-in",
-        text = "Player death pauses the loop and resumes on respawn. Vanishing "
-            .. "targets are re-acquired automatically. Failed movement escalates "
-            .. "methods, then skips that target for 15 s. Nothing here needs a toggle.",
+        name = "Status",
+        text = "Quest automation unlocks once GameProfile.QUEST is filled "
+            .. "(containers, tags, giver patterns, objective sources).",
+    })
+    local loopToggle = tab:CreateToggle({
+        name = "Auto Quest Loop",
+        description = "Accept -> complete -> turn in -> repeat",
+        flag = "Quest_Loop",
+        callback = function(value)
+            Logger:debug("Quest loop requested: " .. tostring(value))
+        end,
+    })
+    loopToggle:Lock(LOCK_REASON_QUEST)
+    local questRow = tab:CreateGroup()
+    local acceptToggle = questRow:CreateToggle({
+        name = "Auto Accept",
+        flag = "Quest_AutoAccept",
+        callback = function() end,
+    })
+    acceptToggle:Lock(LOCK_REASON_QUEST)
+    local turnInToggle = questRow:CreateToggle({
+        name = "Auto Turn-In",
+        flag = "Quest_AutoTurnIn",
+        callback = function() end,
+    })
+    turnInToggle:Lock(LOCK_REASON_QUEST)
+    tab:CreateButton({
+        name = "Detect Quest System",
+        description = "Probes the current game and reports findings to the console",
+        callback = function()
+            local quest, reason = QuestController:detectCurrentQuest()
+            if quest then
+                Logger:info("Quest detected: " .. tostring(quest))
+                Notify.toast("Quest system", "Detected — see console")
+            else
+                Logger:info("Quest detection: " .. tostring(reason))
+                Notify.toast("Quest system", reason or "not found")
+            end
+        end,
+    })
+
+    tab:CreateSection({ name = "Advanced" })
+
+    local advancedRow = tab:CreateGroup()
+    advancedRow:CreateSlider({
+        name = "Target Scan Interval",
+        range = { 0.5, 10 },
+        increment = 0.5,
+        value = 2,
+        suffix = " s",
+        description = "Discovery rescan rate (also feeds ESP)",
+        flag = "Perf_TargetScan",
+        callback = function(value)
+            State.intervals.targetScan = value
+        end,
+    })
+    advancedRow:CreateSlider({
+        name = "Automation Tick Interval",
+        range = { 0.1, 1 },
+        increment = 0.05,
+        value = 0.25,
+        suffix = " s",
+        flag = "Perf_AutoInterval",
+        callback = function(value)
+            State.intervals.automation = value
+        end,
+    })
+    tab:CreateText({
+        name = "Recovery",
+        text = "Built-in: death pauses and resumes on respawn, vanished targets "
+            .. "are re-acquired, failed movement escalates methods then skips "
+            .. "the target for 15 s.",
     })
 
         if not GameDetector.shouldEnableGameFeatures() then
@@ -3973,16 +3915,14 @@ local LOCK_REASON_ESP = "Awaiting ESP source integration"
 local function buildESP(window)
     local tab = window:CreateTab({ name = "ESP" })
 
-    tab:CreateSection({ name = "Status" })
+    tab:CreateSection({ name = "ESP" })
 
     tab:CreateText({
-        name = "Scaffold",
-        text = "The ESP architecture is wired (categories, settings, update "
-            .. "loop, cleanup) but renders nothing until your existing ESP "
-            .. "source is analyzed and integrated. Nothing pretends to work.",
+        name = "Status",
+        text = "Scaffold — the pipeline (categories, settings, update loop, "
+            .. "cleanup) is wired but renders nothing until an ESP source "
+            .. "is integrated. Nothing pretends to work.",
     })
-
-    tab:CreateSection({ name = "Master" })
 
     local espMaster = tab:CreateToggle({
         name = "Enable ESP",
@@ -4002,8 +3942,11 @@ local function buildESP(window)
         { id = "QuestNPCs", flag = "ESP_Cat_Quest",     help = "Quest givers (once known)" },
         { id = "Items",     flag = "ESP_Cat_Items",     help = "Drops and items (once known)" },
     }
-    for _, cat in ipairs(categories) do
-        local toggle = tab:CreateToggle({
+    local catRowA = tab:CreateGroup()
+    local catRowB = tab:CreateGroup()
+    for index, cat in ipairs(categories) do
+        local row = index <= 3 and catRowA or catRowB
+        local toggle = row:CreateToggle({
             name = cat.id,
             description = cat.help,
             flag = cat.flag,
@@ -4017,15 +3960,18 @@ local function buildESP(window)
     tab:CreateSection({ name = "Display" })
 
     local display = {
-        { label = "Name",     flag = "ESP_Show_Name" },
-        { label = "Distance", flag = "ESP_Show_Distance" },
-        { label = "Health",   flag = "ESP_Show_Health" },
-        { label = "Box",      flag = "ESP_Show_Box" },
-        { label = "Tracer",   flag = "ESP_Show_Tracer" },
+        { label = "Name",      flag = "ESP_Show_Name" },
+        { label = "Distance",  flag = "ESP_Show_Distance" },
+        { label = "Health",    flag = "ESP_Show_Health" },
+        { label = "Box",       flag = "ESP_Show_Box" },
+        { label = "Tracer",    flag = "ESP_Show_Tracer" },
         { label = "Highlight", flag = "ESP_Show_Highlight" },
     }
-    for _, option in ipairs(display) do
-        local toggle = tab:CreateToggle({
+    local dispRowA = tab:CreateGroup()
+    local dispRowB = tab:CreateGroup()
+    for index, option in ipairs(display) do
+        local row = index <= 3 and dispRowA or dispRowB
+        local toggle = row:CreateToggle({
             name = option.label,
             flag = option.flag,
             callback = function(value)
@@ -4038,41 +3984,27 @@ local function buildESP(window)
 
     tab:CreateSection({ name = "Visuals" })
 
-    local playerColor = tab:CreateColorPicker({
-        name = "Player Color",
-        color = Color3.fromRGB(80, 200, 120),
-        flag = "ESP_Color_Players",
-        callback = function(color)
-            State.esp.colors = State.esp.colors or {}
-            State.esp.colors.Players = color
-        end,
-    })
-    playerColor:Lock(LOCK_REASON_ESP)
+    local colorDefs = {
+        { label = "Player Color", key = "Players", color = Color3.fromRGB(80, 200, 120),  flag = "ESP_Color_Players" },
+        { label = "NPC Color",    key = "NPCs",    color = Color3.fromRGB(255, 170, 60),   flag = "ESP_Color_NPCs" },
+        { label = "Boss Color",   key = "Bosses",  color = Color3.fromRGB(230, 70, 70),    flag = "ESP_Color_Bosses" },
+    }
+    for _, def in ipairs(colorDefs) do
+        local picker = tab:CreateColorPicker({
+            name = def.label,
+            color = def.color,
+            flag = def.flag,
+            callback = function(color)
+                State.esp.colors = State.esp.colors or {}
+                State.esp.colors[def.key] = color
+            end,
+        })
+        picker:Lock(LOCK_REASON_ESP)
+    end
 
-    local npcColor = tab:CreateColorPicker({
-        name = "NPC Color",
-        color = Color3.fromRGB(255, 170, 60),
-        flag = "ESP_Color_NPCs",
-        callback = function(color)
-            State.esp.colors = State.esp.colors or {}
-            State.esp.colors.NPCs = color
-        end,
-    })
-    npcColor:Lock(LOCK_REASON_ESP)
-
-    local bossColor = tab:CreateColorPicker({
-        name = "Boss Color",
-        color = Color3.fromRGB(230, 70, 70),
-        flag = "ESP_Color_Bosses",
-        callback = function(color)
-            State.esp.colors = State.esp.colors or {}
-            State.esp.colors.Bosses = color
-        end,
-    })
-    bossColor:Lock(LOCK_REASON_ESP)
-
-    local updateRate = tab:CreateSlider({
-        name = "ESP Update Rate",
+    local espSliders = tab:CreateGroup()
+    local updateRate = espSliders:CreateSlider({
+        name = "Update Rate",
         range = { 0.05, 1 },
         increment = 0.05,
         value = 0.1,
@@ -4083,9 +4015,8 @@ local function buildESP(window)
         end,
     })
     updateRate:Lock(LOCK_REASON_ESP)
-
-    local maxDistance = tab:CreateSlider({
-        name = "ESP Max Distance",
+    local maxDistance = espSliders:CreateSlider({
+        name = "Max Distance",
         range = { 100, 5000 },
         increment = 50,
         value = 2000,
@@ -4100,87 +4031,26 @@ local function buildESP(window)
     return tab
 end
 
-local LOCK_REASON_QUEST = "Awaiting GameProfile.QUEST data"
+local THEMES = { "default", "cobalt", "ember", "amethyst", "frost", "rose" }
 
-local function buildQuest(window)
-    local tab = window:CreateTab({ name = "Quest" })
+local function buildSettings(window)
+    local tab = window:CreateTab({ name = "Settings" })
 
-    tab:CreateText({
-        name = "Scaffold",
-        text = "Quest support activates once Project Slayers 2 exposes its "
-            .. "quest structure. Fill GameProfile.QUEST (enabled, containers, "
-            .. "tags, giver patterns, objective sources) and the Quest mode, "
-            .. "this tab, and the QuestController unlock automatically.",
-    })
-
-    local loopToggle = tab:CreateToggle({
-        name = "Auto Quest Loop",
-        description = "Accept -> complete -> turn in -> repeat",
-        flag = "Quest_Loop",
-        callback = function(value)
-            Logger:debug("Quest loop requested: " .. tostring(value))
-        end,
-    })
-    loopToggle:Lock(LOCK_REASON_QUEST)
-
-    local acceptToggle = tab:CreateToggle({
-        name = "Auto Accept Quest",
-        flag = "Quest_AutoAccept",
-        callback = function() end,
-    })
-    acceptToggle:Lock(LOCK_REASON_QUEST)
-
-    local turnInToggle = tab:CreateToggle({
-        name = "Auto Turn-In",
-        flag = "Quest_AutoTurnIn",
-        callback = function() end,
-    })
-    turnInToggle:Lock(LOCK_REASON_QUEST)
-
-    tab:CreateButton({
-        name = "Detect Quest System",
-        description = "Probes the current game and reports findings to the console",
-        callback = function()
-            local quest, reason = QuestController:detectCurrentQuest()
-            if quest then
-                Logger:info("Quest detected: " .. tostring(quest))
-                Notify.toast("Quest system", "Detected — see console")
-            else
-                Logger:info("Quest detection: " .. tostring(reason))
-                Notify.toast("Quest system", reason or "not found")
-            end
-        end,
-    })
-
-    return tab
-end
-
-local function buildConfig(window)
-    local tab = window:CreateTab({ name = "Config" })
-
-    tab:CreateSection({ name = "Configurations" })
+    tab:CreateSection({ name = "Configuration" })
 
     local configDropdown = tab:CreateDropdown({
         name = "Saved Configs",
         options = {},
         placeholder = "None saved yet",
+        description = "Selecting pre-fills the name field below",
         forgetState = true,
         callback = function(option)
-                        if Elements.configName then
+            if Elements.configName then
                 Elements.configName:Set(option, true)
             end
         end,
     })
     Elements.configDropdown = configDropdown
-
-    tab:CreateButton({
-        name = "Refresh List",
-        callback = function()
-            ConfigController:refresh()
-        end,
-    })
-
-    tab:CreateSection({ name = "Manage" })
 
     local nameInput = tab:CreateInput({
         name = "Config Name",
@@ -4195,14 +4065,14 @@ local function buildConfig(window)
     local manageRow = tab:CreateGroup()
     manageRow:CreateButton({
         name = "Save",
-        description = "Writes current state to the named config (.rfld)",
+        description = "Snapshot current state (.rfld)",
         callback = function()
             ConfigController:save()
         end,
     })
     manageRow:CreateButton({
         name = "Load",
-        description = "Applies the config through every element (callbacks fire)",
+        description = "Applies through every element (callbacks fire)",
         callback = function()
             ConfigController:load()
         end,
@@ -4214,8 +4084,6 @@ local function buildConfig(window)
         end,
     })
 
-    tab:CreateSection({ name = "Automation" })
-
     tab:CreateToggle({
         name = "Auto-Load On Start",
         description = "Loads the last-used config one second after boot",
@@ -4225,25 +4093,6 @@ local function buildConfig(window)
             State.settings.autoLoadConfig = value and true or false
         end,
     })
-
-    tab:CreateText({
-        name = "How saving works",
-        text = "Every toggle/slider/dropdown/keybind saves itself under a "
-            .. "stable flag (Rayfield Gen2 built-in persistence) and restores "
-            .. "on the next launch. Named configurations above are snapshots "
-            .. "on top of that — and Rayfield's own settings tab also gains a "
-            .. "Configurations section automatically.",
-    })
-
-    ConfigController:bind(configDropdown, nameInput)
-
-    return tab
-end
-
-local THEMES = { "default", "cobalt", "ember", "amethyst", "frost", "rose" }
-
-local function buildSettings(window)
-    local tab = window:CreateTab({ name = "Settings" })
 
     tab:CreateSection({ name = "Interface" })
 
@@ -4259,7 +4108,6 @@ local function buildSettings(window)
             Logger:debug("Theme changed: " .. theme)
         end,
     })
-
     tab:CreateKeybind({
         name = "UI Toggle",
         description = "Show / hide the window",
@@ -4271,14 +4119,23 @@ local function buildSettings(window)
             end)
         end,
     })
-
-    tab:CreateToggle({
+    local notifRow = tab:CreateGroup()
+    notifRow:CreateToggle({
         name = "Notifications",
-        description = "Cards for meaningful events only (start/stop, hops, configs)",
+        description = "Cards for meaningful events (start/stop, hops, configs)",
         value = true,
         flag = "UI_Notifications",
         callback = function(value)
             State.settings.notificationsEnabled = value and true or false
+        end,
+    })
+    notifRow:CreateToggle({
+        name = "Toasts",
+        description = "Small pills for quick confirmations",
+        value = true,
+        flag = "UI_Toasts",
+        callback = function(value)
+            State.settings.toastsEnabled = value and true or false
         end,
     })
     tab:CreateSlider({
@@ -4291,25 +4148,11 @@ local function buildSettings(window)
             State.settings.notificationDuration = value
         end,
     })
-    tab:CreateToggle({
-        name = "Toasts",
-        description = "Small pills for quick confirmations",
-        value = true,
-        flag = "UI_Toasts",
-        callback = function(value)
-            State.settings.toastsEnabled = value and true or false
-        end,
-    })
-    tab:CreateText({
-        name = "Mobile",
-        text = "Rayfield Gen2 adapts the layout per device automatically "
-            .. "(the sidebar rail collapses to icons on narrow screens), so "
-            .. "there is no separate compact mode to fake here.",
-    })
 
     tab:CreateSection({ name = "Performance" })
 
-    tab:CreateSlider({
+    local perfRow = tab:CreateGroup()
+    perfRow:CreateSlider({
         name = "Home Update Interval",
         range = { 0.5, 5 },
         increment = 0.25,
@@ -4320,31 +4163,9 @@ local function buildSettings(window)
             State.intervals.homeStats = value
         end,
     })
-    tab:CreateSlider({
-        name = "Target Scan Interval",
-        range = { 0.5, 10 },
-        increment = 0.5,
-        value = 2,
-        suffix = " s",
-        flag = "Perf_TargetScan",
-        callback = function(value)
-            State.intervals.targetScan = value
-        end,
-    })
-    tab:CreateSlider({
-        name = "Automation Tick Interval",
-        range = { 0.1, 1 },
-        increment = 0.05,
-        value = 0.25,
-        suffix = " s",
-        flag = "Perf_AutoInterval",
-        callback = function(value)
-            State.intervals.automation = value
-        end,
-    })
-    tab:CreateToggle({
-        name = "Auto Performance Mode",
-        description = "Slows update loops when FPS drops, restores when it recovers",
+    perfRow:CreateToggle({
+        name = "Auto Performance",
+        description = "Slows update loops when FPS drops, restores on recovery",
         value = true,
         flag = "Perf_Auto",
         callback = function(value)
@@ -4364,17 +4185,32 @@ local function buildSettings(window)
             table.concat(ModuleManager.loadedList, ", ")
         ),
     })
-
-    local projectRow = tab:CreateGroup()
-    projectRow:CreateButton({
-        name = "Reload Project",
-        description = "Clean shutdown, then re-execute (see console for details)",
+    tab:CreateKeybind({
+        name = "Emergency Stop Key",
+        description = "Global panic key — works regardless of the tab you are on",
+        value = Enum.KeyCode.P,
+        flag = "Settings_EmergencyKey",
+        callback = function()
+            Emergency.stop()
+        end,
+    })
+    local lifecycleRow = tab:CreateGroup()
+    lifecycleRow:CreateButton({
+        name = "Emergency Stop",
+        description = "Kills every active feature instantly (automation, fly, noclip, speed)",
+        callback = function()
+            Emergency.stop()
+        end,
+    })
+    lifecycleRow:CreateButton({
+        name = "Reload",
+        description = "Clean shutdown, then re-execute",
         callback = function()
             Emergency.reload()
         end,
     })
-    projectRow:CreateButton({
-        name = "Destroy Project",
+    lifecycleRow:CreateButton({
+        name = "Destroy",
         description = "Full cleanup and UI removal",
         callback = function()
             State.window:Popup({
@@ -4396,17 +4232,11 @@ local function buildSettings(window)
         end,
     })
 
-    return tab
-end
-
-local function buildDebug(window)
-    local tab = window:CreateTab({ name = "Debug" })
-
-    tab:CreateSection({ name = "Console" })
+    tab:CreateSection({ name = "Debug" })
 
     local console = tab:CreateConsole({
         name = "Log Console",
-        height = 320,
+        height = 300,
         follow = true,
         maxLines = 200,
     })
@@ -4429,8 +4259,6 @@ local function buildDebug(window)
         end,
     })
 
-    tab:CreateSection({ name = "Log Settings" })
-
     tab:CreateToggle({
         name = "Debug Logging",
         description = "Shows [DEBUG] lines — off by default so users are not flooded",
@@ -4442,7 +4270,6 @@ local function buildDebug(window)
             Logger:info("Debug logging " .. (value and "enabled" or "disabled"))
         end,
     })
-
     tab:CreateDropdown({
         name = "Minimum Level",
         options = { "INFO", "WARN", "ERROR" },
@@ -4454,9 +4281,6 @@ local function buildDebug(window)
             State.settings.logLevel = level
         end,
     })
-
-    tab:CreateSection({ name = "Diagnostics" })
-
     tab:CreateButton({
         name = "Dump Discovered Targets",
         description = "Prints every cached target — the tool that fills GameProfile",
@@ -4465,14 +4289,9 @@ local function buildDebug(window)
         end,
     })
 
-    Elements.statConnections = tab:CreateStat({
-        name = "Tracked Connections",
-        value = 0,
-    })
-    Elements.statLoops = tab:CreateStat({
-        name = "Active Loops",
-        value = 0,
-    })
+    local trackerStats = tab:CreateGroup()
+    Elements.statConnections = trackerStats:CreateStat({ name = "Connections", value = 0 })
+    Elements.statLoops = trackerStats:CreateStat({ name = "Loops", value = 0 })
 
         Tracker.loop("debug.tracker", 2, function()
         local connections, loops = Tracker.stats()
@@ -4483,6 +4302,8 @@ local function buildDebug(window)
             pcall(function() Elements.statLoops:Set(loops) end)
         end
     end)
+
+    ConfigController:bind(configDropdown, nameInput)
 
     return tab
 end
@@ -4536,37 +4357,23 @@ function UI.createWindow()
 end
 
 function UI.buildTabs(window)
-        window:CreateSection({ name = "Main" })
-    buildHome(window)
-
-    window:CreateSection({ name = "Features" })
+        buildHome(window)
     buildUniversal(window)
-    buildPlayers(window)
-    buildServer(window)
+    buildAutoFarm(window)
     buildESP(window)
-
-    window:CreateSection({ name = "Game" })
-    buildAutomation(window)
-    buildQuest(window)
-
-    window:CreateSection({ name = "System" })
-    buildConfig(window)
+    buildServer(window)
     buildSettings(window)
-    buildDebug(window)
 
         HomeStats.handles = {
-        players       = Elements.statPlayers,
-        ping          = Elements.statPing,
-        uptime        = Elements.statUptime,
-        kills         = Elements.statKills,
-        interactions  = Elements.statInteractions,
-        targets       = Elements.statTargets,
+        players = Elements.statPlayers,
+        ping    = Elements.statPing,
+        kills   = Elements.statKills,
+        targets = Elements.statTargets,
     }
     HomeStats.texts = {
         game    = Elements.homeGame,
         player  = Elements.homePlayer,
         task    = Elements.homeTask,
-        methods = Elements.homeMethods,
     }
     HomeStats.progress = Elements.homeProgress
 
