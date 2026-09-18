@@ -1,4 +1,4 @@
-local VERSION = "2.7.1"
+local VERSION = "3.0.0"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
@@ -384,140 +384,226 @@ end
 
 local GameProfile = {}
 do
-                local onLoadHandlers = {}
+        local onLoadHandlers = {}
 
-                function GameProfile.onLoad(fn)
-                        if type(fn) == "function" then
-                                table.insert(onLoadHandlers, fn)
+        function GameProfile.onLoad(fn)
+                if type(fn) == "function" then
+                        table.insert(onLoadHandlers, fn)
+                end
+        end
+
+        GameProfile.gameName = "Project Slayers 2"
+        GameProfile.targetPlaceIds = {}
+        GameProfile.ready = true
+        GameProfile.status = "ACTIVE"
+        GameProfile.lockReason = ""
+
+        -- Paths verified against the analyzed client dump (project slayers 2.rbxl)
+        GameProfile.data = {
+                npcs = {
+                        activeScan = "Workspace/Humanoids/Regions",
+                        stationaryScan = "Workspace/Debree/Regions",
+                        bossMarker = "BossInfo",
+                },
+                teleportPoints = {
+                        { name = "Spawn", path = "Workspace/SpawnLocation" },
+                        { name = "Windy Peak Crystal", path = "Workspace/Debree/Regions/Windy Peak/SpawnCrystal" },
+                        { name = "Iceveil Settlement Crystal", path = "Workspace/Debree/Regions/Iceveil Valley/SpawnCrystal - Iceveil Settlement" },
+                        { name = "Mistfall Harbor Crystal", path = "Workspace/Debree/Regions/Mistfall Harbor/SpawnCrystal" },
+                        { name = "Bamboo Grove Crystal", path = "Workspace/Debree/Regions/Bamboo Grove/SpawnCrystal" },
+                        { name = "Bamboo Sanctuary Crystal", path = "Workspace/Debree/Regions/Bamboo Grove/SpawnCrystal - Bamboo Grove Sanctuary" },
+                        { name = "Butterfly Estate Crystal", path = "Workspace/Debree/Regions/Butterfly Estate/SpawnCrystal" },
+                        { name = "Final Selection Crystal", path = "Workspace/Debree/Regions/Final Selection Plains/SpawnCrystal - Final Selection" },
+                        { name = "Hidden Mist Village Crystal", path = "Workspace/Debree/Regions/Hidden Mist Village/SpawnCrystal" },
+                        { name = "Muzan's Lair", path = "Workspace/Map/DetachedMaps/Muzan's Lair" },
+                        { name = "Training: Boulder Push", path = "Workspace/Training/Boulder Push" },
+                        { name = "Training: Squat Rack", path = "Workspace/Training/Squat Rack" },
+                        { name = "Training: Aim Training", path = "Workspace/Training/Aim Training" },
+                        { name = "Training: Boulder Split", path = "Workspace/Training/Boulder Split" },
+                        { name = "Training: Cup Game", path = "Workspace/Training/Cup Game" },
+                        { name = "Training: Meditation", path = "Workspace/Training/Meditation" },
+                        { name = "Training: Pushups", path = "Workspace/Training/Pushups" },
+                        { name = "Training: Parkour Dungeon", path = "Workspace/Training/Parkour Dungeon" },
+                },
+                quests = {
+                        definitions = "ReplicatedStorage/QuestStates",
+                        holder = "Quests/Holder",
+                },
+                remotes = {
+                        signalEvent = "ReplicatedStorage/Communication/ServerAndClient/Signals/SignalEvent/Event",
+                        signalFunction = "ReplicatedStorage/Communication/ServerAndClient/Signals/SignalFunction/Function",
+                },
+                mobs = {
+                        -- name fragments that identify killable mobs when scanning live models
+                        patterns = { "Bandit", "Demon", "Bear", "Mizunoto", "Mizunoe", "Kanoe", "Subordinate", "Rogue", "Trainee" },
+                },
+                bosses = {
+                        marker = "BossInfo",
+                        known = { "Zuko", "Yeti Demon", "Hand Demon", "Muzan", "Mokuro", "Mother Bear", "Kaiden", "Hoyuzo" },
+                },
+                spiderLilies = {
+                        workspaceName = "Spider Lily",
+                },
+                clans = {
+                        -- clans observed on live players in the dump; the full pool lives in the spin menu
+                        clanList = {
+                                "None", "Agatsuma", "Ando", "Aokawa", "Douma", "Sabito",
+                                "Shinazugawa", "Susumaru", "Ubuyashiki", "Urokodaki", "Yukimori",
+                        },
+                        menuGui = "",
+                        rerollButton = "",
+                        rerollRemote = "",
+                        clanLabel = "",
+                },
+                stats = {
+                        archiveBosses = "Archives/Bosses",
+                        expCurrent = "Exp/Current",
+                        expGoal = "Exp/Goal",
+                },
+        }
+
+        function GameProfile.load(profileData)
+                if type(profileData) ~= "table" then
+                        Logger.warn("GameProfile.load expects a table")
+                        return false
+                end
+                for key, value in pairs(profileData) do
+                        GameProfile.data[key] = value
+                end
+                if profileData.placeIds then
+                        GameProfile.targetPlaceIds = profileData.placeIds
+                end
+                GameProfile.ready = true
+                GameProfile.status = "ACTIVE"
+                GameProfile.lockReason = ""
+                Logger.info("GameProfile loaded: " .. tostring(profileData.name or "unnamed"))
+                for _, fn in ipairs(onLoadHandlers) do
+                        pcall(fn)
+                end
+                return true
+        end
+
+        function GameProfile.get(path)
+                local node = GameProfile.data
+                for segment in string.gmatch(path, "[^.]+") do
+                        if type(node) ~= "table" then
+                                return nil
                         end
+                        node = node[segment]
                 end
+                return node
+        end
 
-                GameProfile.gameName = "Project Slayers 2"
-                GameProfile.targetPlaceIds = {}
-                GameProfile.ready = false
-                GameProfile.status = "PENDING_RELEASE"
-                GameProfile.lockReason = "Project Slayers 2 is not released yet. Game-specific features stay locked until the instance data is provided."
-
-                -- Empty until the game instance file arrives; filling it unlocks every game-specific feature
-                GameProfile.data = {
-                                npcs = {},
-                                teleportPoints = {},
-                                quests = {},
-                                remotes = {},
-                                mobs = {},
-                                bosses = {},
-                                spiderLilies = {},
-                                clans = {
-                                                menuGui = "",
-                                                rerollButton = "",
-                                                rerollRemote = "",
-                                                clanLabel = "",
-                                                clanList = {},
-                                },
-                                stats = {},
-                }
-
-                function GameProfile.load(profileData)
-                                if type(profileData) ~= "table" then
-                                                Logger.warn("GameProfile.load expects a table")
-                                                return false
-                                end
-                                for key, value in pairs(profileData) do
-                                                GameProfile.data[key] = value
-                                end
-                                if profileData.placeIds then
-                                                GameProfile.targetPlaceIds = profileData.placeIds
-                                end
-                                GameProfile.ready = true
-                                GameProfile.status = "ACTIVE"
-                                GameProfile.lockReason = ""
-                                Logger.info("GameProfile loaded: " .. tostring(profileData.name or "unnamed"))
-                                -- onLoad handlers unlock locked UI elements and refresh the quest/boss/clan/location lists
-                                for _, fn in ipairs(onLoadHandlers) do
-                                        pcall(fn)
-                                end
-                                return true
+        function GameProfile.resolvePath(path)
+                if not path or path == "" then
+                        return nil
                 end
-
-                function GameProfile.get(path)
-                                local node = GameProfile.data
-                                for segment in string.gmatch(path, "[^.]+") do
-                                                if type(node) ~= "table" then
-                                                                return nil
-                                                end
-                                                node = node[segment]
-                                end
-                                return node
+                local node = game
+                for segment in string.gmatch(path, "[^/]+") do
+                        if node == nil then
+                                return nil
+                        end
+                        node = node:FindFirstChild(segment)
                 end
+                return node
+        end
 
-                function GameProfile.resolvePath(path)
-                                if not path or path == "" then
-                                                return nil
-                                end
-                                local node = game
-                                for segment in string.gmatch(path, "[^./]+") do
-                                                if node == nil then
-                                                                return nil
-                                                end
-                                                node = node:FindFirstChild(segment)
-                                end
-                                return node
+        function GameProfile.getPlayerSlot()
+                local ps = ReplicatedStorage:FindFirstChild("Player_Service")
+                local data = ps and ps:FindFirstChild("Data")
+                local playerFolder = data and data:FindFirstChild(LocalPlayer.Name)
+                if not playerFolder then
+                        return nil
                 end
+                local equipped = 1
+                local eq = playerFolder:FindFirstChild("slotEquipped")
+                if eq and tonumber(eq.Value) and eq.Value > 0 then
+                        equipped = math.floor(eq.Value)
+                end
+                local slots = playerFolder:FindFirstChild("slots")
+                if not slots then
+                        return nil
+                end
+                return slots:FindFirstChild("Slot" .. equipped)
+        end
 end
 
 local GameDetector = {}
 do
-                local detected = nil
+        local detected = nil
 
-                function GameDetector.detect()
-                                if detected then return detected end
-                                local placeId = game.PlaceId
-                                local jobId = game.JobId
-                                local matched = nil
-                                for _, id in ipairs(GameProfile.targetPlaceIds) do
-                                                if id == placeId then
-                                                                matched = true
-                                                                break
-                                                end
-                                end
-                                detected = {
-                                                placeId = placeId,
-                                                jobId = jobId,
-                                                gameName = (placeId > 0 and game.Name) or "Unknown",
-                                                creator = (placeId > 0 and game.Creator.Name) or "",
-                                                inPS2 = matched == true,
-                                                supported = GameProfile.ready and matched == true,
-                                }
-                                return detected
+        -- PS2 is identified by its replicated folder structure; place ids stay optional
+        local function structureMatches()
+                if ReplicatedStorage:FindFirstChild("Player_Service") == nil then
+                        return false
                 end
+                if Workspace:FindFirstChild("Humanoids") == nil then
+                        return false
+                end
+                return true
+        end
 
-                function GameDetector.getStatusText()
-                                local info = GameDetector.detect()
-                                if info.supported then
-                                                return "Supported"
-                                end
-                                if not GameProfile.ready then
-                                                return "Awaiting release"
-                                end
-                                return "Wrong game"
+        function GameDetector.detect()
+                if detected and detected.inPS2 then
+                        return detected
                 end
+                local placeId = game.PlaceId
+                local jobId = game.JobId
+                local matched = structureMatches()
+                if not matched then
+                        for _, id in ipairs(GameProfile.targetPlaceIds) do
+                                if id == placeId then
+                                        matched = true
+                                        break
+                                end
+                        end
+                end
+                detected = {
+                        placeId = placeId,
+                        jobId = jobId,
+                        gameName = (placeId > 0 and game.Name) or "Unknown",
+                        creator = (placeId > 0 and game.Creator.Name) or "",
+                        inPS2 = matched,
+                        supported = matched,
+                }
+                return detected
+        end
 
-                function GameDetector.isGameReady()
-                                local info = GameDetector.detect()
-                                return info.supported
+        function GameDetector.getStatusText()
+                local info = GameDetector.detect()
+                if info.supported then
+                        return "Supported"
                 end
+                return "Not in Project Slayers 2"
+        end
 
-                -- Single gate every game-specific feature calls before acting
-                function GameDetector.requireGame(featureName)
-                                if GameDetector.isGameReady() then
-                                                return true
-                                end
-                                local status = GameDetector.getStatusText()
-                                Util.notify(featureName or "Feature", "Locked - " .. status .. ". " .. GameProfile.lockReason, 5)
-                                Logger.warn((featureName or "feature") .. " blocked: " .. status)
-                                return false
+        function GameDetector.isGameReady()
+                return GameDetector.detect().supported
+        end
+
+        function GameDetector.requireGame(featureName)
+                if GameDetector.isGameReady() then
+                        return true
                 end
+                local status = GameDetector.getStatusText()
+                Util.notify(featureName or "Feature", "Locked - " .. status .. ". Open Project Slayers 2 to use this feature.", 5)
+                Logger.warn((featureName or "feature") .. " blocked: " .. status)
+                return false
+        end
 end
+
+-- Fires the profile load once every controller has registered its handlers
+task.defer(function()
+        if GameDetector.isGameReady() then
+                GameProfile.load({ name = "baked" })
+        else
+                -- re-check shortly in case replication is still streaming in
+                task.wait(3)
+                if GameDetector.isGameReady() then
+                        GameProfile.load({ name = "baked" })
+                end
+        end
+end)
 
 local MovementController = {}
 do
@@ -2385,22 +2471,100 @@ do
                 maxRerolls = 10,
         }
         ClanController.sessionRerolls = 0
+        ClanController.lastClan = "Unknown"
+        local spinObtained = false
+        local watcherArmed = false
 
-        local function readCurrentClan()
-                local clanLabel = GameProfile.get("clans.clanLabel")
-                local label = GameProfile.resolvePath(clanLabel)
-                if label and label:IsA("TextLabel") then
-                        return label.Text
+        -- Reads the live Clan value from the player data slot
+        local function getClanValue()
+                local slot = GameProfile.getPlayerSlot()
+                if slot == nil then
+                        return nil
+                end
+                local clan = slot:FindFirstChild("Clan")
+                if clan and clan:IsA("StringValue") then
+                        return clan
                 end
                 return nil
         end
 
+        local function getSpinsFolder()
+                local slot = GameProfile.getPlayerSlot()
+                if slot == nil then
+                        return nil
+                end
+                return slot:FindFirstChild("Spinning")
+        end
+
+        function ClanController.getCurrentClan()
+                if not GameDetector.isGameReady() then
+                        return "Locked"
+                end
+                local value = getClanValue()
+                if value then
+                        return tostring(value.Value or "Unknown")
+                end
+                return "Unknown"
+        end
+
+        function ClanController.getSpinsText()
+                local folder = getSpinsFolder()
+                if folder == nil then
+                        return "-"
+                end
+                local spins = folder:FindFirstChild("Spins")
+                local free = folder:FindFirstChild("FreeClanSpins")
+                return tostring(spins and math.floor(spins.Value + 0.5) or 0)
+                        .. " spins | " .. tostring(free and math.floor(free.Value + 0.5) or 0) .. " free clan"
+        end
+
+        function ClanController.getClanOptions()
+                local list = GameProfile.get("clans.clanList")
+                if type(list) == "table" and #list > 0 then
+                        return list
+                end
+                return { "None loaded" }
+        end
+
+        -- Finds the spin button inside the open clan menu (the menu UI is built on demand)
+        local function findSpinButton()
+                local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+                if playerGui == nil then
+                        return nil
+                end
+                local found = nil
+                local scanned = 0
+                local function scanContainer(container, depth)
+                        if found or depth > 6 or scanned > 2000 then
+                                return
+                        end
+                        for _, child in ipairs(container:GetChildren()) do
+                                scanned += 1
+                                if child:IsA("GuiButton") then
+                                        local label = child.Name
+                                        pcall(function()
+                                                if child:IsA("TextButton") and child.Text then
+                                                        label = child.Text
+                                                end
+                                        end)
+                                        local lower = tostring(label or ""):lower()
+                                        if lower:find("spin", 1, true) and not lower:find("spins:", 1, true) then
+                                                found = child
+                                                return
+                                        end
+                                end
+                                if #child:GetChildren() > 0 then
+                                        scanContainer(child, depth + 1)
+                                end
+                        end
+                end
+                pcall(scanContainer, playerGui, 1)
+                return found
+        end
+
         -- firesignal -> getconnections -> Activate chain covers different executors
-        local function triggerRerollButton()
-                local buttonPath = GameProfile.get("clans.rerollButton")
-                local button = GameProfile.resolvePath(buttonPath)
-                if not button or not button:IsA("GuiButton") then
-                        Logger.warn("clan reroll button not found: " .. tostring(buttonPath))
+        local function triggerButton(button)
+                if button == nil then
                         return false
                 end
                 local fired = false
@@ -2428,49 +2592,39 @@ do
                 return fired
         end
 
-        local function fireRerollRemote()
-                local remotePath = GameProfile.get("clans.rerollRemote")
-                local remote = GameProfile.resolvePath(remotePath)
-                if not remote then
-                        return false
-                end
-                if remote:IsA("RemoteEvent") then
-                        remote:FireServer()
-                        return true
-                end
-                if remote:IsA("RemoteFunction") then
-                        pcall(function() remote:InvokeServer() end)
-                        return true
-                end
-                if remote:IsA("UnboundRemoteEvent") then
-                        pcall(function() remote:FireServer() end)
-                        return true
-                end
-                return false
-        end
-
-        -- Spins run through the main menu (no reroll NPC in PS2); profile paths point into the menu UI
         function ClanController.doReroll()
                 if not GameDetector.requireGame("Auto Spin Clan") then
                         return nil
                 end
-                if GameProfile.get("clans.rerollRemote") and GameProfile.get("clans.rerollRemote") ~= "" then
-                        fireRerollRemote()
-                elseif GameProfile.get("clans.rerollButton") and GameProfile.get("clans.rerollButton") ~= "" then
-                        if not triggerRerollButton() then
-                                Util.notify("Auto Spin Clan", "Spin button not reachable")
-                                return nil
-                        end
-                else
-                        Util.notify("Auto Spin Clan", "No spin action data in profile yet")
+                local button = findSpinButton()
+                if button == nil then
+                        Util.notify("Auto Spin Clan", "Open the clan spin menu in-game first", 5)
+                        return nil
+                end
+                if not triggerButton(button) then
+                        Util.notify("Auto Spin Clan", "Spin button could not be fired")
                         return nil
                 end
                 ClanController.sessionRerolls += 1
                 task.wait(ClanController.settings.delay)
-                return readCurrentClan()
+                return ClanController.getCurrentClan()
         end
 
         local rerollLoopActive = false
+
+        -- Stops the Spin Until Target loop after the watcher confirms the desired clan
+        local function markObtained(clanName)
+                if spinObtained then
+                        return
+                end
+                spinObtained = true
+                Util.notify("Auto Spin Clan", "Desired clan obtained: " .. tostring(clanName), 6)
+                WebhookController.notifyClanObtained(clanName, ClanController.sessionRerolls)
+                if ClanController.settings.enabled and ClanController.settings.mode == "Spin Until Target" then
+                        ClanController.setEnabled(false)
+                end
+        end
+
         function ClanController.setEnabled(enabled)
                 local want = enabled and true or false
                 if ClanController.settings.enabled == want then
@@ -2480,33 +2634,35 @@ do
                         if not GameDetector.requireGame("Auto Spin Clan") then
                                 return false
                         end
-                        local hasRemote = (GameProfile.get("clans.rerollRemote") or "") ~= ""
-                        local hasButton = (GameProfile.get("clans.rerollButton") or "") ~= ""
-                        if not hasRemote and not hasButton then
-                                Util.notify("Auto Spin Clan", "Locked until clan menu instance data is added", 5)
-                                return false
-                        end
                         ClanController.settings.enabled = true
+                        spinObtained = false
                         Tracker.setRunning("clan", true)
                         if ClanController.settings.mode == "Spin Until Target" then
+                                if ClanController.settings.target == "" then
+                                        Util.notify("Auto Spin Clan", "Pick a Desired Clan first", 5)
+                                        ClanController.settings.enabled = false
+                                        Tracker.setRunning("clan", false)
+                                        return false
+                                end
                                 rerollLoopActive = true
                                 task.spawn(function()
                                         local attempts = 0
-                                        while rerollLoopActive and Tracker.isRunning("clan") do
+                                        while rerollLoopActive and Tracker.isRunning("clan") and not spinObtained do
                                                 if attempts >= ClanController.settings.maxRerolls then
                                                         Util.notify("Auto Spin Clan", "Spin limit reached (" .. attempts .. ")")
                                                         break
                                                 end
                                                 attempts += 1
                                                 local result = ClanController.doReroll()
-                                                if result and ClanController.settings.target ~= "" and result == ClanController.settings.target then
-                                                        Util.notify("Auto Spin Clan", "Desired clan obtained: " .. result)
-                                                        WebhookController.notifyClanObtained(result, ClanController.sessionRerolls)
-                                                        break
+                                                if result == nil then
+                                                        task.wait(2)
                                                 end
                                                 task.wait(0.2)
                                         end
                                         rerollLoopActive = false
+                                        if ClanController.settings.enabled then
+                                                ClanController.setEnabled(false)
+                                        end
                                 end)
                         elseif ClanController.settings.mode == "Fixed Count" then
                                 rerollLoopActive = true
@@ -2515,13 +2671,22 @@ do
                                         while rerollLoopActive and Tracker.isRunning("clan") and attempts < ClanController.settings.maxRerolls do
                                                 attempts += 1
                                                 ClanController.doReroll()
+                                                if ClanController.settings.target ~= "" and spinObtained then
+                                                        break
+                                                end
                                         end
                                         rerollLoopActive = false
                                         Util.notify("Auto Spin Clan", "Done - " .. attempts .. " spin(s)")
+                                        if ClanController.settings.enabled then
+                                                ClanController.setEnabled(false)
+                                        end
                                 end)
                         else
                                 task.spawn(function()
                                         ClanController.doReroll()
+                                        if ClanController.settings.enabled then
+                                                ClanController.setEnabled(false)
+                                        end
                                 end)
                         end
                         return true
@@ -2557,46 +2722,64 @@ do
 
         function ClanController.rerollOnce()
                 if not GameDetector.requireGame("Auto Spin Clan") then
-                        return false, "Locked until release"
+                        return false, "Open Project Slayers 2"
                 end
                 local result = ClanController.doReroll()
                 if result == nil then
-                        return false, "Spin could not fire"
-                end
-                if ClanController.settings.target ~= "" and result == ClanController.settings.target then
-                        WebhookController.notifyClanObtained(result, ClanController.sessionRerolls)
+                        return false, "Open the clan spin menu first"
                 end
                 return true, result
         end
 
-        function ClanController.getCurrentClan()
-                if not GameDetector.isGameReady() then
-                        return "Locked"
-                end
-                return readCurrentClan() or "Unknown"
-        end
-
-        function ClanController.getClanOptions()
-                local list = GameProfile.get("clans.clanList")
-                if type(list) == "table" and #list > 0 then
-                        return list
-                end
-                return { "None loaded" }
-        end
-
         function ClanController.getStatusText()
                 if GameDetector.isGameReady() then
-                        return "Current clan: " .. ClanController.getCurrentClan() .. " | Spins this session: " .. tostring(ClanController.sessionRerolls)
+                        return "Current clan: " .. ClanController.getCurrentClan()
+                                .. " | " .. ClanController.getSpinsText()
+                                .. " | Spins this session: " .. tostring(ClanController.sessionRerolls)
                 end
-                return "Clan spins run through the in-game main menu. Locked until release - menu instance data required. Spins this session: " .. tostring(ClanController.sessionRerolls)
+                return "Open Project Slayers 2 to use clan features. Spins this session: " .. tostring(ClanController.sessionRerolls)
         end
+
+        -- Arms the clan change watcher: updates status and fires the webhook on the desired clan
+        GameProfile.onLoad(function()
+                if watcherArmed then
+                        return
+                end
+                watcherArmed = true
+                task.spawn(function()
+                        local attempts = 0
+                        while attempts < 30 do
+                                attempts += 1
+                                local value = getClanValue()
+                                if value then
+                                        ClanController.lastClan = tostring(value.Value or "Unknown")
+                                        local ok = pcall(function()
+                                                local conn = value:GetPropertyChangedSignal("Value"):Connect(function()
+                                                        local newClan = tostring(value.Value or "Unknown")
+                                                        Logger.info("clan changed: " .. tostring(ClanController.lastClan) .. " -> " .. newClan)
+                                                        ClanController.lastClan = newClan
+                                                        if ClanController.settings.target ~= "" and newClan == ClanController.settings.target then
+                                                                markObtained(newClan)
+                                                        end
+                                                end)
+                                                Tracker.track(conn, "clanwatch")
+                                        end)
+                                        if ok then
+                                                Logger.info("clan watcher armed on the player data slot")
+                                                return
+                                        end
+                                end
+                                task.wait(1)
+                        end
+                end)
+        end)
 end
 
 local DiscoveryController = {}
 do
         DiscoveryController.lastSummary = "No scan yet"
 
-        -- Logs nearby humanoid candidates to help fill GameProfile after release
+        -- Logs nearby humanoid candidates (name/hp/dist/path) for debugging target scans
         function DiscoveryController.dump()
                 local found = {}
                 local scanned = 0
@@ -2654,7 +2837,6 @@ end
 
 local AutomationController = {}
 do
-        -- Shared movement and interaction settings for the quest, demon and boss engines
         AutomationController.settings = {
                 target = "",
                 exclusions = {},
@@ -2735,12 +2917,189 @@ do
 
         function AutomationController.getStatusText()
                 if not GameDetector.isGameReady() then
-                        return "Automation locked - PS2 instance data required after release"
+                        return "Automation locked - open Project Slayers 2"
                 end
-                return "Automation ready - quest and boss engines arrive with the game instance file"
+                return "Automation ready"
         end
 
-        -- Heuristic quest-giver scan (Dialog / ProximityPrompt) used to fill GameProfile.quests
+        -- Returns the currently equipped data slot for the local player
+        function AutomationController.getSlot()
+                return GameProfile.getPlayerSlot()
+        end
+
+        -- Scans live Workspace for mob models (Model + Humanoid, not a player)
+        function AutomationController.scanMobModels(matchFn)
+                local found = {}
+                local scanned = 0
+                local exclusions = {}
+                for _, name in ipairs(AutomationController.settings.exclusions) do
+                        exclusions[name:lower()] = true
+                end
+                local function scanContainer(container, depth)
+                        if depth > 3 or scanned > 2500 then
+                                return
+                        end
+                        for _, child in ipairs(container:GetChildren()) do
+                                scanned += 1
+                                if child:IsA("Model") then
+                                        local player = Players:GetPlayerFromCharacter(child)
+                                        if not player then
+                                                local humanoid = child:FindFirstChildOfClass("Humanoid")
+                                                if humanoid and humanoid.Health > 0 and not exclusions[child.Name:lower()] then
+                                                        if matchFn == nil or matchFn(child.Name) then
+                                                                local root = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart
+                                                                if root then
+                                                                        table.insert(found, {
+                                                                                model = child,
+                                                                                humanoid = humanoid,
+                                                                                root = root,
+                                                                                name = child.Name,
+                                                                                dist = Util.distanceTo(root),
+                                                                                healthPct = humanoid.MaxHealth > 0 and (humanoid.Health / humanoid.MaxHealth * 100) or 0,
+                                                                        })
+                                                                end
+                                                        end
+                                                end
+                                        end
+                                        scanContainer(child, depth + 1)
+                                elseif child:IsA("Folder") then
+                                        scanContainer(child, depth + 1)
+                                end
+                        end
+                end
+                pcall(scanContainer, Workspace, 1)
+                table.sort(found, function(a, b)
+                        return a.dist < b.dist
+                end)
+                return found
+        end
+
+        -- Keyword matcher built from quest/task/boss words (e.g. "Bandits remaining" -> "bandit")
+        function AutomationController.makeKeywordMatcher(words)
+                local lowered = {}
+                for _, word in ipairs(words) do
+                        local w = tostring(word or ""):lower()
+                        w = w:gsub("%s+", "")
+                        w = w:gsub("s$", "")
+                        if #w >= 3 then
+                                table.insert(lowered, w)
+                        end
+                end
+                return function(name)
+                        if name == nil then
+                                return false
+                        end
+                        local n = tostring(name):lower():gsub("%s+", "")
+                        for _, w in ipairs(lowered) do
+                                if n:sub(1, #w) == w or n:find(w, 1, true) then
+                                        return true
+                                end
+                        end
+                        return false
+                end
+        end
+
+        function AutomationController.makeMobMatcher()
+                -- matches the mob patterns from the game profile
+                local patterns = GameProfile.get("mobs.patterns") or {}
+                return function(name)
+                        if name == nil then
+                                return false
+                        end
+                        local n = tostring(name):lower()
+                        for _, pattern in ipairs(patterns) do
+                                if n:find(tostring(pattern):lower(), 1, true) then
+                                        return true
+                                end
+                        end
+                        return false
+                end
+        end
+
+        -- Engages continuous movement toward a target model until stopped
+        function AutomationController.moveTo(targetModel)
+                AutomationController.stopMovement()
+                local root = targetModel:FindFirstChild("HumanoidRootPart") or targetModel.PrimaryPart
+                if root == nil then
+                        return false
+                end
+                Tracker.setRunning("automove", true)
+                if AutomationController.settings.moveMethod == "Walk" then
+                        task.spawn(function()
+                                while Tracker.isRunning("automove") do
+                                        local humanoid = Util.getHumanoid()
+                                        local targetRoot = targetModel and targetModel.Parent and targetModel:FindFirstChild("HumanoidRootPart")
+                                        if humanoid == nil or targetRoot == nil then
+                                                break
+                                        end
+                                        pcall(function()
+                                                humanoid:MoveTo(targetRoot.Position)
+                                        end)
+                                        task.wait(0.4)
+                                end
+                                AutomationController.stopMovement()
+                        end)
+                        return true
+                end
+                local conn
+                conn = RunService.Heartbeat:Connect(function()
+                        local myRoot = Util.getRoot()
+                        local targetRoot = targetModel and targetModel.Parent and targetModel:FindFirstChild("HumanoidRootPart")
+                        if myRoot == nil or targetRoot == nil then
+                                return
+                        end
+                        local offset = math.max(AutomationController.settings.distance, 2)
+                        pcall(function()
+                                if AutomationController.settings.moveMethod == "Tween" then
+                                        local goal = targetRoot.Position + Vector3.new(0, 1, 0)
+                                        local delta = goal - myRoot.Position
+                                        if delta.Magnitude > offset then
+                                                local step = math.min(delta.Magnitude - offset, AutomationController.settings.moveSpeed * 0.03)
+                                                myRoot.CFrame = CFrame.new(myRoot.Position + delta.Unit * step)
+                                        end
+                                else
+                                        -- Magnitize: hold position behind the target facing it
+                                        myRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 0, offset)
+                                end
+                        end)
+                end)
+                Tracker.track(conn, "automove")
+                return true
+        end
+
+        function AutomationController.stopMovement()
+                if Tracker.isRunning("automove") then
+                        Tracker.setRunning("automove", false)
+                        Tracker.cleanup("automove")
+                end
+        end
+
+        -- Fires the nearest interaction prompt on a model (quest givers, crystals)
+        function AutomationController.interactWith(model)
+                if model == nil then
+                        return false
+                end
+                local prompt
+                pcall(function()
+                        prompt = model:FindFirstChildWhichIsA("ProximityPrompt", true)
+                end)
+                if prompt == nil then
+                        return false
+                end
+                if fireproximityprompt then
+                        local ok = pcall(fireproximityprompt, prompt)
+                        if ok then
+                                return true
+                        end
+                end
+                pcall(function()
+                        prompt:InputHoldBegin()
+                        task.wait(0.1)
+                        prompt:InputHoldEnd()
+                end)
+                return true
+        end
+
         function AutomationController.scanQuestSystem()
                 local givers = {}
                 local scanned = 0
@@ -2753,7 +3112,6 @@ do
                                 if child:IsA("Model") then
                                         local humanoid = child:FindFirstChildOfClass("Humanoid")
                                         if humanoid then
-                                                local hasDialog = child:FindFirstChildOfClass("Dialog") ~= nil
                                                 local hasPrompt = false
                                                 for _, d in ipairs(child:GetDescendants()) do
                                                         if d:IsA("ProximityPrompt") then
@@ -2761,8 +3119,8 @@ do
                                                                 break
                                                         end
                                                 end
-                                                if hasDialog or hasPrompt then
-                                                        table.insert(givers, { name = child.Name, path = child:GetFullName(), dialog = hasDialog, prompt = hasPrompt })
+                                                if hasPrompt then
+                                                        table.insert(givers, { name = child.Name, path = child:GetFullName(), prompt = hasPrompt })
                                                 end
                                         end
                                         scanContainer(child, depth + 1)
@@ -2771,36 +3129,25 @@ do
                                 end
                         end
                 end
-                scanContainer(Workspace, 1)
-                local objectives = {}
-                pcall(function()
-                        local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-                        if not playerGui then
-                                return
+                pcall(scanContainer, Workspace, 1)
+                -- live quest state from the player data slot
+                local slot = AutomationController.getSlot()
+                local quests = slot and slot:FindFirstChild("Quests")
+                local holder = quests and quests:FindFirstChild("Holder")
+                local active = "none"
+                if holder then
+                        local first = holder:GetChildren()[1]
+                        if first then
+                                active = first.Name
                         end
-                        for _, gui in ipairs(playerGui:GetDescendants()) do
-                                if gui:IsA("TextLabel") and gui.Text ~= "" then
-                                        local lower = gui.Text:lower()
-                                        if lower:find("quest") or lower:find("objective") or lower:find("slay") or lower:find("defeat") or lower:find("collect") then
-                                                table.insert(objectives, { text = gui.Text, path = gui:GetFullName() })
-                                                if #objectives >= 10 then
-                                                        break
-                                                end
-                                        end
-                                end
-                        end
-                end)
-                Logger.info("quest scan: " .. #givers .. " giver candidate(s), " .. #objectives .. " objective label(s)")
+                end
+                Logger.info("quest scan: " .. #givers .. " prompt npc(s), active quest: " .. active)
                 for i, giver in ipairs(givers) do
                         if i <= 15 then
-                                local tags = (giver.dialog and " [Dialog]" or "") .. (giver.prompt and " [Prompt]" or "")
-                                Logger.info("  giver " .. string.format("%02d", i) .. ": " .. giver.name .. "  path=" .. giver.path .. tags)
+                                Logger.info("  giver " .. string.format("%02d", i) .. ": " .. giver.name .. "  path=" .. giver.path)
                         end
                 end
-                for _, objective in ipairs(objectives) do
-                        Logger.info("  objective: \"" .. objective.text .. "\"  path=" .. objective.path)
-                end
-                local summary = #givers .. " giver(s), " .. #objectives .. " objective label(s) - details in the log console"
+                local summary = #givers .. " prompt npc(s), active: " .. active .. " - details in the log console"
                 Util.notify("Quest Scan", summary, 6)
                 return summary
         end
@@ -2810,42 +3157,96 @@ local QuestDetector = {}
 do
         QuestDetector.status = "Idle"
 
-        -- Game-specific quest detection will be connected after instance analysis
+        local function getHolder()
+                local slot = AutomationController.getSlot()
+                if slot == nil then
+                        return nil
+                end
+                local quests = slot:FindFirstChild("Quests")
+                return quests and quests:FindFirstChild("Holder")
+        end
+
         function QuestDetector.getPlayerLevel()
+                local slot = AutomationController.getSlot()
+                if slot == nil then
+                        return nil
+                end
+                local exp = slot:FindFirstChild("Exp")
+                local current = exp and exp:FindFirstChild("Current")
+                local goal = exp and exp:FindFirstChild("Goal")
+                if current and goal and goal.Value > 0 then
+                        return math.floor(current.Value / goal.Value * 100)
+                end
                 return nil
         end
 
-        function QuestDetector.findQuestGivers()
-                return {}
+        -- Quest definitions live as modules under ReplicatedStorage/QuestStates
+        function QuestDetector.getQuestOptions()
+                local list = {}
+                local defs = GameProfile.resolvePath(GameProfile.get("quests.definitions") or "")
+                if defs then
+                        pcall(function()
+                                for _, child in ipairs(defs:GetChildren()) do
+                                        if child:IsA("ModuleScript") and child.Name ~= "" then
+                                                table.insert(list, child.Name)
+                                        end
+                                end
+                        end)
+                end
+                table.sort(list)
+                return list
         end
 
-        function QuestDetector.selectQuestForLevel(level)
-                return nil
+        -- Reads the live quest from the data slot holder
+        function QuestDetector.getActiveQuest()
+                local holder = getHolder()
+                if holder == nil then
+                        return nil
+                end
+                local questConfig = holder:GetChildren()[1]
+                if questConfig == nil then
+                        return nil
+                end
+                local quest = { name = questConfig.Name, questString = "", tasks = {} }
+                pcall(function()
+                        local qs = questConfig:FindFirstChild("QuestString")
+                        if qs then
+                                quest.questString = tostring(qs.Value or "")
+                        end
+                end)
+                pcall(function()
+                        local tasks = questConfig:FindFirstChild("Tasks")
+                        if tasks then
+                                for _, taskName in ipairs(tasks:GetChildren()) do
+                                        table.insert(quest.tasks, taskName.Name)
+                                end
+                        end
+                end)
+                return quest
         end
 
         function QuestDetector.hasQuestData()
-                local quests = GameProfile.data.quests
-                return type(quests) == "table" and next(quests) ~= nil
+                return GameDetector.isGameReady()
         end
 
-        function QuestDetector.getQuestOptions()
-                local quests = GameProfile.data.quests
-                local list = {}
-                if type(quests) ~= "table" then
-                        return list
+        function QuestDetector.findQuestGivers()
+                -- prompt NPCs from the stationary npc registry
+                local givers = {}
+                local regions = GameProfile.resolvePath(GameProfile.get("npcs.stationaryScan") or "")
+                if regions == nil then
+                        return givers
                 end
-                if #quests > 0 then
-                        for _, quest in ipairs(quests) do
-                                local label = type(quest) == "table" and (quest.name or quest.Name) or nil
-                                table.insert(list, label or tostring(quest))
+                pcall(function()
+                        for _, region in ipairs(regions:GetChildren()) do
+                                local npcs = region:FindFirstChild("StationaryNpcs")
+                                if npcs then
+                                        for _, npc in ipairs(npcs:GetChildren()) do
+                                                table.insert(givers, { name = npc.Name, model = npc, dist = 0 })
+                                        end
+                                end
                         end
-                else
-                        for name in pairs(quests) do
-                                table.insert(list, name)
-                        end
-                        table.sort(list)
-                end
-                return list
+                end)
+                return givers
         end
 end
 
@@ -2853,34 +3254,62 @@ local BossDetector = {}
 do
         BossDetector.status = "Idle"
 
-        function BossDetector.hasBossData()
-                local bosses = GameProfile.data.bosses
-                return type(bosses) == "table" and next(bosses) ~= nil
+        -- Live boss registry: ActiveNpcs folders that carry a BossInfo child
+        function BossDetector.scanBossFolders()
+                local bosses = {}
+                local regions = GameProfile.resolvePath(GameProfile.get("npcs.activeScan") or "")
+                if regions == nil then
+                        return bosses
+                end
+                local marker = GameProfile.get("npcs.bossMarker") or "BossInfo"
+                pcall(function()
+                        for _, region in ipairs(regions:GetChildren()) do
+                                local active = region:FindFirstChild("ActiveNpcs")
+                                if active then
+                                        for _, npc in ipairs(active:GetChildren()) do
+                                                if npc:FindFirstChild(marker) then
+                                                        table.insert(bosses, { name = npc.Name, folder = npc, region = region.Name })
+                                                end
+                                        end
+                                end
+                        end
+                end)
+                return bosses
         end
 
         function BossDetector.getBossOptions()
-                local bosses = GameProfile.data.bosses
-                local list = {}
-                if type(bosses) ~= "table" then
-                        return list
-                end
-                if #bosses > 0 then
-                        for _, boss in ipairs(bosses) do
-                                local label = type(boss) == "table" and (boss.name or boss.Name) or nil
-                                table.insert(list, label or tostring(boss))
+                local list = { "Auto" }
+                local seen = { Auto = true }
+                for _, name in ipairs(BossDetector.scanBossFolders()) do
+                        if not seen[name.name] then
+                                seen[name.name] = true
+                                table.insert(list, name.name)
                         end
-                else
-                        for name in pairs(bosses) do
+                end
+                for _, name in ipairs(GameProfile.get("bosses.known") or {}) do
+                        if not seen[name] then
+                                seen[name] = true
                                 table.insert(list, name)
                         end
-                        table.sort(list)
                 end
                 return list
         end
 
-        -- Game-specific boss detection will be connected after instance analysis
+        function BossDetector.hasBossData()
+                return GameDetector.isGameReady()
+        end
+
         function BossDetector.scan()
-                return {}
+                local folders = BossDetector.scanBossFolders()
+                if #folders == 0 then
+                        return {}
+                end
+                local words = {}
+                for _, f in ipairs(folders) do
+                        table.insert(words, f.name)
+                end
+                local matcher = AutomationController.makeKeywordMatcher(words)
+                return AutomationController.scanMobModels(matcher)
         end
 end
 
@@ -2889,17 +3318,48 @@ do
         SpiderLilyDetector.status = "Idle"
 
         function SpiderLilyDetector.hasSpiderLilyData()
-                local lilies = GameProfile.data.spiderLilies
-                return type(lilies) == "table" and next(lilies) ~= nil
+                return GameDetector.isGameReady()
         end
 
-        -- Game-specific Spider Lily detection will be connected after instance analysis
+        -- Spider Lilies spawn as named models directly under Workspace
         function SpiderLilyDetector.scan()
-                return {}
+                local lilies = {}
+                local wanted = (GameProfile.get("spiderLilies.workspaceName") or "Spider Lily"):lower()
+                pcall(function()
+                        local function scanContainer(container, depth)
+                                if depth > 2 then
+                                        return
+                                end
+                                for _, child in ipairs(container:GetChildren()) do
+                                        if child:IsA("Model") and child.Name:lower() == wanted then
+                                                local root = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart
+                                                if root == nil then
+                                                        for _, d in ipairs(child:GetDescendants()) do
+                                                                if d:IsA("BasePart") then
+                                                                        root = d
+                                                                        break
+                                                                end
+                                                        end
+                                                end
+                                                if root then
+                                                        table.insert(lilies, { model = child, root = root, dist = Util.distanceTo(root) })
+                                                end
+                                        end
+                                        if child:IsA("Folder") or child:IsA("Model") then
+                                                scanContainer(child, depth + 1)
+                                        end
+                                end
+                        end
+                        scanContainer(Workspace, 1)
+                end)
+                table.sort(lilies, function(a, b)
+                        return a.dist < b.dist
+                end)
+                return lilies
         end
 
         function SpiderLilyDetector.getDetectedCount()
-                return 0
+                return #SpiderLilyDetector.scan()
         end
 end
 
@@ -2908,6 +3368,7 @@ do
         CombatHandler.questMethod = "Melee"
         CombatHandler.bossMethod = "Melee"
         local combatNotified = false
+        local lastSwing = 0
 
         local function validMethod(method)
                 return method == "Melee" or method == "Sword"
@@ -2927,16 +3388,80 @@ do
                 return CombatHandler.bossMethod
         end
 
-        -- Real attack logic (melee / sword skill) arrives with the game instance file
+        local function ensureWeapon()
+                local humanoid = Util.getHumanoid()
+                if humanoid == nil then
+                        return nil
+                end
+                local tool = Util.getEquippedTool()
+                if tool then
+                        return tool
+                end
+                -- equip the selected tool, or fall back to the first weapon in the backpack
+                if ToolController.selected ~= "" then
+                        ToolController.equipSelected()
+                        tool = Util.getEquippedTool()
+                end
+                if tool == nil then
+                        local backpack = Util.getBackpack()
+                        if backpack then
+                                for _, t in ipairs(backpack:GetChildren()) do
+                                        if t:IsA("Tool") then
+                                                pcall(function()
+                                                        humanoid:EquipTool(t)
+                                                end)
+                                                task.wait(0.1)
+                                                tool = Util.getEquippedTool()
+                                                break
+                                        end
+                                end
+                        end
+                end
+                return tool
+        end
+
+        local function swingMouse()
+                local camera = Workspace.CurrentCamera
+                local x, y = 960, 540
+                if camera and camera.ViewportSize then
+                        x = camera.ViewportSize.X / 2
+                        y = camera.ViewportSize.Y / 2
+                end
+                local ok = pcall(function()
+                        local vim = GetService("VirtualInputManager")
+                        vim:SendMouseButtonEvent(x, y, 0, true, game, 0)
+                        task.wait(0.05)
+                        vim:SendMouseButtonEvent(x, y, 0, false, game, 0)
+                end)
+                return ok
+        end
+
         function CombatHandler.attack(target)
                 if target == nil then
                         return false
                 end
-                if not combatNotified then
-                        combatNotified = true
-                        Logger.info("combat handler armed - attack logic pending the game instance file")
+                if not GameDetector.isGameReady() then
+                        return false
                 end
-                return false
+                local now = os.clock()
+                if now - lastSwing < 0.1 then
+                        return false
+                end
+                lastSwing = now
+                local tool = ensureWeapon()
+                if tool == nil then
+                        if not combatNotified then
+                                combatNotified = true
+                                Logger.warn("no weapon found in backpack - equip a weapon for combat")
+                                Util.notify("Combat", "No weapon found - equip one or pick it under Main > Targets")
+                        end
+                        return false
+                end
+                pcall(function()
+                        tool:Activate()
+                end)
+                swingMouse()
+                return true
         end
 end
 
@@ -2991,18 +3516,54 @@ do
                 AutoQuestController.currentTarget = nil
         end
 
-        local function autoQuestLoop()
-                local announced = false
-                while Tracker.isRunning("autoquest") do
-                        task.wait(1)
-                        if not announced then
-                                announced = true
-                                Logger.info("auto quest placeholder running - engine logic arrives with the game instance file")
+        local function questKeywords(quest)
+                local words = {}
+                if quest then
+                        for word in quest.name:gmatch("%a+") do
+                                table.insert(words, word)
                         end
-                        if QuestDetector.hasQuestData() then
+                        for _, taskName in ipairs(quest.tasks or {}) do
+                                for word in taskName:gmatch("%a+") do
+                                        table.insert(words, word)
+                                end
+                        end
+                end
+                return words
+        end
+
+        local function autoQuestLoop()
+                local lastQuestName = nil
+                while Tracker.isRunning("autoquest") do
+                        task.wait(math.max(AutomationController.settings.tickInterval, 0.25))
+                        local quest = QuestDetector.getActiveQuest()
+                        if quest == nil then
                                 AutoQuestController.setState("Searching for Quest")
+                                AutoQuestController.status.quest = "None"
+                                AutoQuestController.status.target = "None"
+                                AutomationController.stopMovement()
                         else
-                                AutoQuestController.setState("No Suitable Quest Found")
+                                if lastQuestName ~= quest.name then
+                                        lastQuestName = quest.name
+                                        Util.notify("Auto Quest", "Quest active: " .. quest.name, 4)
+                                end
+                                AutoQuestController.setState("Quest Active")
+                                AutoQuestController.status.quest = quest.name
+                                local matcher = AutomationController.makeKeywordMatcher(questKeywords(quest))
+                                local mobs = AutomationController.scanMobModels(matcher)
+                                if #mobs == 0 then
+                                        AutoQuestController.status.target = "No targets nearby"
+                                        AutoQuestController.status.healthPct = 0
+                                        AutomationController.stopMovement()
+                                else
+                                        local mob = mobs[1]
+                                        AutoQuestController.currentTarget = mob.model
+                                        AutoQuestController.status.target = mob.name
+                                        AutoQuestController.status.healthPct = mob.healthPct
+                                        if AutomationController.settings.autoAttack then
+                                                AutomationController.moveTo(mob.model)
+                                                CombatHandler.attack(mob.model)
+                                        end
+                                end
                         end
                 end
         end
@@ -3016,10 +3577,6 @@ do
                         if not GameDetector.requireGame("Auto Quest") then
                                 return false
                         end
-                        if not QuestDetector.hasQuestData() then
-                                Util.notify("Auto Quest", "No quest data in game profile yet")
-                                return false
-                        end
                         AutoQuestController.settings.enabled = true
                         AutoQuestController.setState("Searching for Quest")
                         Tracker.setRunning("autoquest", true)
@@ -3028,6 +3585,7 @@ do
                 end
                 AutoQuestController.settings.enabled = false
                 Tracker.setRunning("autoquest", false)
+                AutomationController.stopMovement()
                 AutoQuestController.resetStatus()
                 return true
         end
@@ -3110,19 +3668,22 @@ do
         end
 
         local function autoDemonLoop()
-                local announced = false
                 while Tracker.isRunning("autodemon") do
                         task.wait(1)
-                        if not announced then
-                                announced = true
-                                Logger.info("auto demon placeholder running - spider lily logic arrives with the game instance file")
-                        end
-                        if SpiderLilyDetector.hasSpiderLilyData() then
-                                AutoDemonController.status.detection = "Detecting"
-                                AutoDemonController.setState("Detecting Spider Lilies")
-                        else
-                                AutoDemonController.status.detection = "No data"
+                        local lilies = SpiderLilyDetector.scan()
+                        if #lilies == 0 then
+                                AutoDemonController.status.detection = "Scanning"
                                 AutoDemonController.setState("No Spider Lilies Found")
+                                AutoDemonController.status.currentLily = "None"
+                                AutoDemonController.currentTarget = nil
+                                AutomationController.stopMovement()
+                        else
+                                local lily = lilies[1]
+                                AutoDemonController.status.detection = "Found " .. #lilies
+                                AutoDemonController.setState("Collecting Spider Lily")
+                                AutoDemonController.status.currentLily = "Spider Lily (" .. Util.round(lily.dist, 0) .. " studs)"
+                                AutoDemonController.currentTarget = lily.model
+                                AutomationController.moveTo(lily.model)
                         end
                 end
         end
@@ -3136,10 +3697,6 @@ do
                         if not GameDetector.requireGame("Auto Demon") then
                                 return false
                         end
-                        if not SpiderLilyDetector.hasSpiderLilyData() then
-                                Util.notify("Auto Demon", "No Spider Lily data in game profile yet")
-                                return false
-                        end
                         AutoDemonController.settings.enabled = true
                         AutoDemonController.status.detection = "Detecting"
                         AutoDemonController.setState("Detecting Spider Lilies")
@@ -3149,6 +3706,7 @@ do
                 end
                 AutoDemonController.settings.enabled = false
                 Tracker.setRunning("autodemon", false)
+                AutomationController.stopMovement()
                 AutoDemonController.setState("Disabled")
                 AutoDemonController.status.currentLily = "None"
                 AutoDemonController.status.detection = "Idle"
@@ -3192,7 +3750,7 @@ do
         }
         AutoBossController.settings = {
                 enabled = false,
-                selectedBoss = "",
+                selectedBoss = "Auto",
                 autoAttack = false,
                 detection = false,
         }
@@ -3226,18 +3784,50 @@ do
                 AutoBossController.currentTarget = nil
         end
 
+        -- Resolves the boss to hunt: the selection, or the nearest BossInfo npc
+        local function resolveBossName()
+                local selected = AutoBossController.settings.selectedBoss
+                if selected ~= "" and selected ~= "Auto" then
+                        return selected
+                end
+                local folders = BossDetector.scanBossFolders()
+                if #folders > 0 then
+                        return folders[1].name
+                end
+                return nil
+        end
+
         local function autoBossLoop()
-                local announced = false
+                local defeatedLogged = {}
                 while Tracker.isRunning("autoboss") do
-                        task.wait(1)
-                        if not announced then
-                                announced = true
-                                Logger.info("auto boss placeholder running - boss logic arrives with the game instance file")
-                        end
-                        if AutoBossController.settings.selectedBoss ~= "" or BossDetector.hasBossData() then
-                                AutoBossController.setState("Detecting Boss")
-                        else
+                        task.wait(math.max(AutomationController.settings.tickInterval, 0.25))
+                        local bossName = resolveBossName()
+                        if bossName == nil then
                                 AutoBossController.setState("No Boss Found")
+                                AutoBossController.status.currentBoss = "None"
+                                AutomationController.stopMovement()
+                        else
+                                AutoBossController.status.currentBoss = bossName
+                                local matcher = AutomationController.makeKeywordMatcher({ bossName })
+                                local mobs = AutomationController.scanMobModels(matcher)
+                                if #mobs == 0 then
+                                        AutoBossController.setState("Detecting Boss")
+                                        AutoBossController.status.healthPct = 0
+                                        AutomationController.stopMovement()
+                                else
+                                        local boss = mobs[1]
+                                        AutoBossController.currentTarget = boss.model
+                                        AutoBossController.setState("Attacking Boss")
+                                        AutoBossController.status.healthPct = boss.healthPct
+                                        if boss.healthPct <= 0 and not defeatedLogged[bossName] then
+                                                defeatedLogged[bossName] = true
+                                                Util.notify("Auto Boss", bossName .. " appears defeated", 4)
+                                        end
+                                        if AutoBossController.settings.autoAttack then
+                                                AutomationController.moveTo(boss.model)
+                                                CombatHandler.attack(boss.model)
+                                        end
+                                end
                         end
                 end
         end
@@ -3251,10 +3841,6 @@ do
                         if not GameDetector.requireGame("Auto Boss") then
                                 return false
                         end
-                        if AutoBossController.settings.selectedBoss == "" and not BossDetector.hasBossData() then
-                                Util.notify("Auto Boss", "No boss selected and no boss data in game profile yet")
-                                return false
-                        end
                         AutoBossController.settings.enabled = true
                         AutoBossController.setState("Detecting Boss")
                         Tracker.setRunning("autoboss", true)
@@ -3263,12 +3849,13 @@ do
                 end
                 AutoBossController.settings.enabled = false
                 Tracker.setRunning("autoboss", false)
+                AutomationController.stopMovement()
                 AutoBossController.resetStatus()
                 return true
         end
 
         function AutoBossController.setBoss(name)
-                AutoBossController.settings.selectedBoss = name or ""
+                AutoBossController.settings.selectedBoss = name or "Auto"
         end
 
         function AutoBossController.setAutoAttack(enabled)
@@ -3298,6 +3885,44 @@ do
         function AutoBossController.getHealthPct()
                 return AutoBossController.status.healthPct or 0
         end
+
+        -- Watches Archives/Bosses on the data slot; feeds the boss webhook on new kills
+        function AutoBossController.startArchiveWatch()
+                if Tracker.isRunning("bossarchive") then
+                        return
+                end
+                Tracker.setRunning("bossarchive", true)
+                task.spawn(function()
+                        local knownBosses = {}
+                        while Tracker.isRunning("bossarchive") do
+                                local ok = pcall(function()
+                                        local ps = ReplicatedStorage:FindFirstChild("Player_Service")
+                                        local data = ps and ps:FindFirstChild("Data")
+                                        local playerFolder = data and data:FindFirstChild(LocalPlayer.Name)
+                                        local archives = playerFolder and playerFolder:FindFirstChild("Archives")
+                                        local bosses = archives and archives:FindFirstChild("Bosses")
+                                        if bosses and bosses:IsA("StringValue") then
+                                                local text = tostring(bosses.Value or "")
+                                                for name in text:gmatch("[^,]+") do
+                                                        name = Util.trim(name)
+                                                        if name ~= "" and not knownBosses[name] then
+                                                                knownBosses[name] = true
+                                                                Logger.info("boss archive: " .. name .. " defeated")
+                                                                if WebhookController.boss.enabled and WebhookController.boss.notifyKills then
+                                                                        WebhookController.notifyBossKilled(name, nil)
+                                                                end
+                                                        end
+                                                end
+                                        end
+                                end)
+                                if not ok then
+                                        Tracker.setRunning("bossarchive", false)
+                                        return
+                                end
+                                task.wait(2)
+                        end
+                end)
+        end
 end
 
 local KillAuraController = {}
@@ -3326,8 +3951,8 @@ do
                 return KillAuraController.currentTarget
         end
 
-        -- Provides the current Auto Quest target to Kill Aura, falling back to Auto Boss
         local function resolveTarget()
+                -- Provides the current Auto Quest target to Kill Aura, falling back to Auto Boss
                 local target = AutoQuestController.getTargetModel()
                 if target == nil then
                         target = AutoBossController.getTargetModel()
@@ -3339,11 +3964,22 @@ do
                 while Tracker.isRunning("killaura") do
                         task.wait(KillAuraController.settings.interval)
                         local target = resolveTarget()
-                        if target ~= nil then
+                        if target == nil then
+                                -- no quest/boss target: attack the nearest mob inside the aura range
+                                local matcher = AutomationController.makeMobMatcher()
+                                local mobs = AutomationController.scanMobModels(matcher)
+                                for _, mob in ipairs(mobs) do
+                                        if mob.dist <= KillAuraController.settings.range then
+                                                target = mob.model
+                                                break
+                                        end
+                                end
+                        end
+                        if target ~= nil and target.Parent ~= nil then
                                 KillAuraController.setCurrentTarget(target)
                                 local targetRoot = nil
                                 pcall(function()
-                                        targetRoot = target:FindFirstChild("HumanoidRootPart")
+                                        targetRoot = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
                                 end)
                                 local myRoot = Util.getRoot()
                                 if targetRoot and myRoot then
@@ -3399,6 +4035,11 @@ do
         end
 end
 
+-- Boss archive watch arms as soon as the game structure is detected
+GameProfile.onLoad(function()
+        AutoBossController.startArchiveWatch()
+end)
+
 local LocationDetector = {}
 do
         LocationDetector.scanning = false
@@ -3432,34 +4073,48 @@ do
                 seenNames = {}
         end
 
-        -- Reads GameProfile.data.teleportPoints; real Workspace map scanning connects after instance analysis
+        -- Collects teleport points: baked profile paths + live Workspace structure
         function LocationDetector.ScanLocations()
                 local found = {}
-                local points = GameProfile.data.teleportPoints
-                if type(points) ~= "table" then
-                        return found
+
+                for _, point in ipairs(GameProfile.data.teleportPoints or {}) do
+                        table.insert(found, { name = point.name, path = point.path })
                 end
-                if #points > 0 then
-                        for _, point in ipairs(points) do
-                                if type(point) == "table" then
-                                        table.insert(found, {
-                                                name = point.name or point.Name,
-                                                path = point.path or point.Path or "",
-                                        })
-                                else
-                                        table.insert(found, { name = point, path = "" })
+
+                pcall(function()
+                        -- live region scan: each region folder and its fast-travel crystal
+                        local regions = Workspace:FindFirstChild("Debree")
+                        regions = regions and regions:FindFirstChild("Regions")
+                        if regions then
+                                for _, region in ipairs(regions:GetChildren()) do
+                                        table.insert(found, { name = region.Name .. " (Region)", path = region:GetFullName() })
+                                        for _, child in ipairs(region:GetChildren()) do
+                                                if child:IsA("Model") and child.Name:find("SpawnCrystal") then
+                                                        table.insert(found, { name = child.Name, path = child:GetFullName() })
+                                                end
+                                        end
                                 end
                         end
-                else
-                        for name, path in pairs(points) do
-                                if type(name) == "string" then
-                                        table.insert(found, {
-                                                name = name,
-                                                path = type(path) == "string" and path or "",
-                                        })
+                        -- training areas
+                        local training = Workspace:FindFirstChild("Training")
+                        if training then
+                                for _, area in ipairs(training:GetChildren()) do
+                                        table.insert(found, { name = "Training: " .. area.Name, path = area:GetFullName() })
                                 end
                         end
-                end
+                        -- detached maps (Muzan's Lair etc.)
+                        local maps = Workspace:FindFirstChild("Map")
+                        maps = maps and maps:FindFirstChild("DetachedMaps")
+                        if maps then
+                                for _, area in ipairs(maps:GetChildren()) do
+                                        table.insert(found, { name = area.Name, path = area:GetFullName() })
+                                end
+                        end
+                        -- global spawn
+                        if Workspace:FindFirstChild("SpawnLocation") then
+                                table.insert(found, { name = "Spawn", path = "Workspace/SpawnLocation" })
+                        end
+                end)
                 return found
         end
 
@@ -3493,8 +4148,6 @@ do
         }
         TeleportController.status = "Ready"
         local AUTO_REFRESH_INTERVAL = 30
-        local scanAnnounced = false
-        local teleportAnnounced = false
         local locationsChanged = function() end
 
         function TeleportController.onLocationsChanged(fn)
@@ -3525,13 +4178,44 @@ do
                 LocationDetector.scanning = false
                 local count = LocationDetector.getLocationCount()
                 TeleportController.status = "Locations found: " .. count
-                if not scanAnnounced then
-                        scanAnnounced = true
-                        Logger.info("location framework ready - Workspace map detection arrives with the game instance file")
-                end
                 Logger.info("location refresh: " .. count .. " location(s)")
                 pcall(locationsChanged, count)
                 return count
+        end
+
+        -- Resolves a teleport target to a CFrame position (model pivot or part)
+        local function resolveCFrame(instance)
+                if instance == nil then
+                        return nil
+                end
+                local ok, result = pcall(function()
+                        if instance:IsA("Model") then
+                                return instance:GetPivot()
+                        end
+                        return instance.CFrame
+                end)
+                if ok and result then
+                        return result
+                end
+                -- fallback: first BasePart descendant
+                local part
+                pcall(function()
+                        for _, d in ipairs(instance:GetDescendants()) do
+                                if d:IsA("BasePart") then
+                                        part = d
+                                        break
+                                end
+                        end
+                end)
+                if part then
+                        local ok2, cf = pcall(function()
+                                return part.CFrame
+                        end)
+                        if ok2 then
+                                return cf
+                        end
+                end
+                return nil
         end
 
         function TeleportController.TeleportToLocation()
@@ -3547,17 +4231,40 @@ do
                         Util.notify("Teleports", "That location is not in the current list - refresh and pick again")
                         return false
                 end
-                TeleportController.status = "Teleporting..."
                 if not GameDetector.requireGame("Teleports") then
                         TeleportController.status = "Location unavailable"
                         return false
                 end
-                if not teleportAnnounced then
-                        teleportAnnounced = true
-                        Logger.info("teleport framework armed - movement method arrives with the game instance file")
+                local instance = GameProfile.resolvePath(location.path or "")
+                if instance == nil then
+                        TeleportController.status = "Location unavailable"
+                        Util.notify("Teleports", "Could not resolve that location in the current map")
+                        return false
                 end
-                TeleportController.status = "Location unavailable"
-                Util.notify("Teleports", "Teleport execution arrives with the game instance file")
+                local root = Util.getRoot()
+                if root == nil then
+                        TeleportController.status = "No character"
+                        Util.notify("Teleports", "Character not found")
+                        return false
+                end
+                local cf = resolveCFrame(instance)
+                if cf == nil then
+                        TeleportController.status = "Location unavailable"
+                        Util.notify("Teleports", "Could not read a position for that location")
+                        return false
+                end
+                TeleportController.status = "Teleporting..."
+                local ok = pcall(function()
+                        root.CFrame = CFrame.new(cf.Position + Vector3.new(0, 4, 0))
+                end)
+                if ok then
+                        TeleportController.status = "Teleported to " .. selected
+                        Util.toast("Teleported to " .. selected)
+                        Logger.info("teleported to " .. selected .. " (" .. location.path .. ")")
+                        return true
+                end
+                TeleportController.status = "Teleport failed"
+                Util.notify("Teleports", "Teleport failed - the game may block direct movement")
                 return false
         end
 
@@ -4170,7 +4877,7 @@ do
         HomeTab:CreateSection({ name = "Game Support" })
         HomeTab:CreateText({
                 name = "Project Slayers 2",
-                text = "Game-specific features (Auto Quest, Auto Demon, Auto Boss, Kill Aura, Auto Spin Clan) stay locked until the game releases and the instance data is added. The Teleports tab runs as a framework now and fills its location list once the map detection arrives. Universal features work in every game.",
+                text = "Auto Quest, Auto Demon, Auto Boss, Kill Aura, Teleports and Auto Spin Clan are built from the analyzed Project Slayers 2 instance and only run inside that game. Universal features work everywhere.",
         })
         HomeTab:CreateButton({
                 name = "Check for Updates",
@@ -4544,7 +5251,7 @@ do
         MainTab:CreateSection({ name = "Auto Quest" })
         MainTab:CreateText({
                 name = "Locked",
-                text = "Auto Quest, Auto Demon, Auto Boss and Kill Aura need Project Slayers 2 instance data (quests, NPCs, bosses, Spider Lilies, remotes) and unlock automatically once the game profile loads. Location teleporting lives in the Teleports tab - the location list fills in once the map detection arrives with the instance file.",
+                text = "Auto Quest reads your active quest from the game and hunts its targets. Auto Demon collects Spider Lilies from the map. Auto Boss hunts bosses (boss NPCs carry a BossInfo marker). Kill Aura swings your weapon at quest and boss targets inside its range. All of it only works inside Project Slayers 2.",
         })
         local autoQuestToggle
         autoQuestToggle = MainTab:CreateToggle({
@@ -4570,7 +5277,7 @@ do
                 options = { "Auto Detect" },
                 value = "Auto Detect",
                 placeholder = "Auto Detect",
-                description = "Populated from the game profile once the instance file is loaded",
+                description = "Auto Detect follows your active quest; picking one is informational",
                 forgetState = true,
                 callback = function(option)
                         AutoQuestController.setQuest(normalizeChoice(option))
@@ -4706,7 +5413,7 @@ do
                 name = "Boss Selection",
                 options = {},
                 placeholder = "Select Boss",
-                description = "Populated with the bosses detected from the game once the instance file is loaded",
+                description = "Auto hunts the nearest boss; boss NPCs are detected via their BossInfo marker",
                 forgetState = true,
                 callback = function(option)
                         AutoBossController.setBoss(normalizeChoice(option))
@@ -4961,7 +5668,7 @@ do
         })
         MainTab:CreateText({
                 name = "Recovery",
-                text = "Recovery behaviors (respawn resume, stuck movement escalation, target re-acquisition) return together with the quest and boss engines once the game instance file is loaded.",
+                text = "Movement methods: Magnitize snaps you behind the target, Walk uses the humanoid, Tween glides. If you rubber-band, the game may validate movement - switch to Walk or move manually.",
         })
 
         -- Game-data dropdowns populate the moment the profile loads
@@ -5026,7 +5733,7 @@ do
         TeleportsTab:CreateSection({ name = "Locations" })
         TeleportsTab:CreateText({
                 name = "Location Detection",
-                text = "Locations are detected from the game once the instance file is loaded - nothing is hardcoded. The scan removes duplicates and fills this list automatically; Teleport then moves you to the selected location.",
+                text = "Locations come from the live map: region crystals, training areas and detached maps. Refresh re-scans, Teleport moves you on top of the selected location. Works only inside Project Slayers 2.",
         })
         local locationDropdown
         locationDropdown = TeleportsTab:CreateDropdown({
@@ -5138,7 +5845,7 @@ do
                 name = "Desired Clan",
                 options = ClanController.getClanOptions(),
                 placeholder = "Select Clan",
-                description = "Filled from the game's clan list once the instance file is loaded",
+                description = "Clans observed in-game; the watcher fires the webhook when you land it",
                 forgetState = true,
                 callback = function(option)
                         ClanController.setTarget(normalizeChoice(option))
@@ -5622,7 +6329,7 @@ do
                 name = "Quest Combat Method",
                 options = { "Melee", "Sword" },
                 value = "Melee",
-                description = "How Auto Quest fights quest mobs - wired up with the game instance file",
+                description = "Both swing your equipped weapon; pick Sword to prefer your katana",
                 flag = "SetQuestCombat",
                 callback = function(option)
                         CombatHandler.setQuestMethod(normalizeChoice(option))
@@ -5634,7 +6341,7 @@ do
                 name = "Boss Combat Method",
                 options = { "Melee", "Sword" },
                 value = "Melee",
-                description = "How Auto Boss fights bosses - wired up with the game instance file",
+                description = "Both swing your equipped weapon; pick Sword to prefer your katana",
                 flag = "SetBossCombat",
                 callback = function(option)
                         CombatHandler.setBossMethod(normalizeChoice(option))
