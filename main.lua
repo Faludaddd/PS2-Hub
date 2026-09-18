@@ -1,4 +1,4 @@
-local VERSION = "3.0.0"
+local VERSION = "3.1.0"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
@@ -16,9 +16,11 @@ local UserInputService = GetService("UserInputService")
 local Workspace = GetService("Workspace")
 local Lighting = GetService("Lighting")
 local TeleportService = GetService("TeleportService")
+local TweenService = GetService("TweenService")
 local HttpService = GetService("HttpService")
 local Stats = GetService("Stats")
 local CoreGui = GetService("CoreGui")
+local ReplicatedStorage = GetService("ReplicatedStorage")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -384,13 +386,21 @@ end
 
 local GameProfile = {}
 do
+        local loaded = false
         local onLoadHandlers = {}
 
+        -- registering after a load still fires immediately, so call order can never drop a handler
         function GameProfile.onLoad(fn)
-                if type(fn) == "function" then
-                        table.insert(onLoadHandlers, fn)
+                if type(fn) ~= "function" then
+                        return
                 end
+                if loaded then
+                        pcall(fn)
+                        return
+                end
+                table.insert(onLoadHandlers, fn)
         end
+
 
         GameProfile.gameName = "Project Slayers 2"
         GameProfile.targetPlaceIds = {}
@@ -462,11 +472,16 @@ do
                 },
         }
 
+        -- fires handler list exactly once; late onLoad registrations run immediately instead
         function GameProfile.load(profileData)
+                if loaded then
+                        return true
+                end
                 if type(profileData) ~= "table" then
                         Logger.warn("GameProfile.load expects a table")
                         return false
                 end
+                loaded = true
                 for key, value in pairs(profileData) do
                         GameProfile.data[key] = value
                 end
@@ -480,7 +495,12 @@ do
                 for _, fn in ipairs(onLoadHandlers) do
                         pcall(fn)
                 end
+                onLoadHandlers = {}
                 return true
+        end
+
+        function GameProfile.isLoaded()
+                return loaded == true
         end
 
         function GameProfile.get(path)
@@ -590,20 +610,226 @@ do
                 Logger.warn((featureName or "feature") .. " blocked: " .. status)
                 return false
         end
-end
-
--- Fires the profile load once every controller has registered its handlers
-task.defer(function()
-        if GameDetector.isGameReady() then
-                GameProfile.load({ name = "baked" })
-        else
-                -- re-check shortly in case replication is still streaming in
-                task.wait(3)
+        -- Called at the very end of the script so every controller and UI onLoad handler exists
+        -- before the profile fires. task.defer would fire at the first yield (the Rayfield HttpGet),
+        -- dropping handlers that register later and leaving game dropdowns empty.
+        function GameDetector.ensureLoaded()
+                if GameProfile.isLoaded() then
+                        return true
+                end
                 if GameDetector.isGameReady() then
                         GameProfile.load({ name = "baked" })
+                        return true
+                end
+                -- replication may still be streaming in right after join; poll briefly
+                if Tracker.isRunning("gamedetect") then
+                        return false
+                end
+                Tracker.setRunning("gamedetect", true)
+                task.spawn(function()
+                        local attempts = 0
+                        while Tracker.isRunning("gamedetect") and attempts < 200 do
+                                attempts += 1
+                                task.wait(3)
+                                if not Tracker.isRunning("gamedetect") then
+                                        break
+                                end
+                                if GameDetector.isGameReady() then
+                                        GameProfile.load({ name = "baked" })
+                                        break
+                                end
+                        end
+                        Tracker.setRunning("gamedetect", false)
+                end)
+                return false
+        end
+end
+
+-- Shared travel engine: Auto Quest, Auto Demon, Auto Boss and the Teleports tab all move
+-- through here. Instant jumps to the objective, Tween glides; neither ever walks or pathfinds.
+local MovementHandler = {}
+do
+        MovementHandler.settings = {
+                method = "Instant",
+                tweenSpeed = 60,
+                arrivalDistance = 4,
+                retargetDistance = 8,
+        }
+
+        local activeTween = nil
+        local tweenGoal = nil
+        local followTarget = nil
+        local followToken = 0
+
+        -- accepts an Instance (model/part), a CFrame, or nil
+        local function resolveGoalCFrame(target)
+                if typeof(target) == "CFrame" then
+                        return target
+                end
+                if typeof(target) ~= "Instance" then
+                        return nil
+                end
+                local ok, cf = pcall(function()
+                        if target:IsA("Model") then
+                                return target:GetPivot()
+                        end
+                        return target.CFrame
+                end)
+                if ok and cf then
+                        return cf
+                end
+                local part = nil
+                pcall(function()
+                        for _, d in ipairs(target:GetDescendants()) do
+                                if d:IsA("BasePart") then
+                                        part = d
+                                        break
+                                end
+                        end
+                end)
+                if part then
+                        local ok2, cf2 = pcall(function()
+                                return part.CFrame
+                        end)
+                        if ok2 then
+                                return cf2
+                        end
+                end
+                return nil
+        end
+
+        local function stopTween()
+                if activeTween then
+                        pcall(function()
+                                activeTween:Cancel()
+                        end)
+                        activeTween = nil
+                        tweenGoal = nil
                 end
         end
-end)
+
+        -- lands near the goal facing it; arrival 0 lands directly on top
+        local function instantTo(root, goal, arrival)
+                pcall(function()
+                        local landing = goal.Position
+                        local delta = root.Position - goal.Position
+                        local flat = Vector3.new(delta.X, 0, delta.Z)
+                        if arrival > 0 and flat.Magnitude > 0.01 then
+                                landing = goal.Position + flat.Unit * math.min(arrival, flat.Magnitude)
+                        end
+                        local lookAt = Vector3.new(goal.Position.X, landing.Y, goal.Position.Z)
+                        root.CFrame = CFrame.new(landing + Vector3.new(0, 2, 0), lookAt)
+                end)
+        end
+
+        local function startTween(root, goal)
+                stopTween()
+                local ok, tween = pcall(function()
+                        local distance = (goal.Position - root.Position).Magnitude
+                        local duration = math.max(distance / math.max(MovementHandler.settings.tweenSpeed, 1), 0.1)
+                        local landing = goal.Position + Vector3.new(0, 1, 0)
+                        local t = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), { CFrame = CFrame.new(landing) })
+                        t:Play()
+                        return t
+                end)
+                if ok then
+                        activeTween = tween
+                        tweenGoal = goal.Position
+                end
+        end
+
+        function MovementHandler.setMethod(method)
+                MovementHandler.settings.method = (method == "Tween") and "Tween" or "Instant"
+                return MovementHandler.settings.method
+        end
+
+        function MovementHandler.setTweenSpeed(value)
+                MovementHandler.settings.tweenSpeed = math.clamp(value, 5, 1000)
+        end
+
+        function MovementHandler.setArrivalDistance(value)
+                MovementHandler.settings.arrivalDistance = math.clamp(value, 1, 40)
+        end
+
+        function MovementHandler.isFollowing(target)
+                return Tracker.isRunning("mhfollow") and followTarget == target
+        end
+
+        function MovementHandler.stop()
+                followToken += 1
+                followTarget = nil
+                Tracker.setRunning("mhfollow", false)
+                stopTween()
+        end
+
+        -- one-shot travel used by the Teleports tab
+        function MovementHandler.travelTo(target)
+                MovementHandler.stop()
+                local root = Util.getRoot()
+                local goal = resolveGoalCFrame(target)
+                if root == nil or goal == nil then
+                        return false
+                end
+                if MovementHandler.settings.method == "Tween" then
+                        startTween(root, goal)
+                else
+                        instantTo(root, goal, 0)
+                end
+                return true
+        end
+
+        -- continuous travel toward a (possibly moving) objective; loop callers re-invoke safely
+        function MovementHandler.follow(target)
+                if target == nil then
+                        return false
+                end
+                if MovementHandler.isFollowing(target) then
+                        return true
+                end
+                local goal = resolveGoalCFrame(target)
+                if goal == nil then
+                        return false
+                end
+                MovementHandler.stop()
+                followTarget = target
+                followToken += 1
+                local myToken = followToken
+                Tracker.setRunning("mhfollow", true)
+                task.spawn(function()
+                        while Tracker.isRunning("mhfollow") and followToken == myToken do
+                                local root = Util.getRoot()
+                                local goal = resolveGoalCFrame(target)
+                                if root == nil or goal == nil or target.Parent == nil then
+                                        break
+                                end
+                                local distance = (goal.Position - root.Position).Magnitude
+                                if distance <= MovementHandler.settings.arrivalDistance then
+                                        stopTween()
+                                elseif MovementHandler.settings.method == "Tween" then
+                                        local drifted = tweenGoal == nil
+                                                or (goal.Position - tweenGoal).Magnitude > MovementHandler.settings.retargetDistance
+                                        if activeTween == nil or drifted then
+                                                startTween(root, goal)
+                                        end
+                                else
+                                        instantTo(root, goal, MovementHandler.settings.arrivalDistance)
+                                end
+                                task.wait(0.25)
+                        end
+                        if followToken == myToken then
+                                MovementHandler.stop()
+                        end
+                end)
+                return true
+        end
+
+        function MovementHandler.getStatusText()
+                if Tracker.isRunning("mhfollow") then
+                        return "Method: " .. MovementHandler.settings.method .. " - moving to objective"
+                end
+                return "Method: " .. MovementHandler.settings.method .. " - idle"
+        end
+end
 
 local MovementController = {}
 do
@@ -2841,9 +3067,6 @@ do
                 target = "",
                 exclusions = {},
                 maxRange = 2000,
-                moveMethod = "Magnitize",
-                moveSpeed = 60,
-                distance = 4,
                 interactMode = "Auto",
                 interactDelay = 0.5,
                 interactRange = 10,
@@ -2873,18 +3096,6 @@ do
 
         function AutomationController.setMaxRange(value)
                 AutomationController.settings.maxRange = value
-        end
-
-        function AutomationController.setMoveMethod(method)
-                AutomationController.settings.moveMethod = method or "Magnitize"
-        end
-
-        function AutomationController.setMoveSpeed(value)
-                AutomationController.settings.moveSpeed = value
-        end
-
-        function AutomationController.setDistance(value)
-                AutomationController.settings.distance = value
         end
 
         function AutomationController.setInteractMode(mode)
@@ -3016,62 +3227,19 @@ do
                 end
         end
 
-        -- Engages continuous movement toward a target model until stopped
+        -- All automation travel routes through the shared MovementHandler (Instant or Tween only)
         function AutomationController.moveTo(targetModel)
                 AutomationController.stopMovement()
-                local root = targetModel:FindFirstChild("HumanoidRootPart") or targetModel.PrimaryPart
-                if root == nil then
-                        return false
+                local ok = MovementHandler.follow(targetModel)
+                if ok then
+                        Tracker.setRunning("automove", true)
                 end
-                Tracker.setRunning("automove", true)
-                if AutomationController.settings.moveMethod == "Walk" then
-                        task.spawn(function()
-                                while Tracker.isRunning("automove") do
-                                        local humanoid = Util.getHumanoid()
-                                        local targetRoot = targetModel and targetModel.Parent and targetModel:FindFirstChild("HumanoidRootPart")
-                                        if humanoid == nil or targetRoot == nil then
-                                                break
-                                        end
-                                        pcall(function()
-                                                humanoid:MoveTo(targetRoot.Position)
-                                        end)
-                                        task.wait(0.4)
-                                end
-                                AutomationController.stopMovement()
-                        end)
-                        return true
-                end
-                local conn
-                conn = RunService.Heartbeat:Connect(function()
-                        local myRoot = Util.getRoot()
-                        local targetRoot = targetModel and targetModel.Parent and targetModel:FindFirstChild("HumanoidRootPart")
-                        if myRoot == nil or targetRoot == nil then
-                                return
-                        end
-                        local offset = math.max(AutomationController.settings.distance, 2)
-                        pcall(function()
-                                if AutomationController.settings.moveMethod == "Tween" then
-                                        local goal = targetRoot.Position + Vector3.new(0, 1, 0)
-                                        local delta = goal - myRoot.Position
-                                        if delta.Magnitude > offset then
-                                                local step = math.min(delta.Magnitude - offset, AutomationController.settings.moveSpeed * 0.03)
-                                                myRoot.CFrame = CFrame.new(myRoot.Position + delta.Unit * step)
-                                        end
-                                else
-                                        -- Magnitize: hold position behind the target facing it
-                                        myRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 0, offset)
-                                end
-                        end)
-                end)
-                Tracker.track(conn, "automove")
-                return true
+                return ok
         end
 
         function AutomationController.stopMovement()
-                if Tracker.isRunning("automove") then
-                        Tracker.setRunning("automove", false)
-                        Tracker.cleanup("automove")
-                end
+                Tracker.setRunning("automove", false)
+                MovementHandler.stop()
         end
 
         -- Fires the nearest interaction prompt on a model (quest givers, crystals)
@@ -4254,12 +4422,16 @@ do
                         return false
                 end
                 TeleportController.status = "Teleporting..."
-                local ok = pcall(function()
-                        root.CFrame = CFrame.new(cf.Position + Vector3.new(0, 4, 0))
-                end)
+                -- travels through the shared MovementHandler: Instant jumps, Tween glides
+                local ok = MovementHandler.travelTo(cf)
                 if ok then
-                        TeleportController.status = "Teleported to " .. selected
-                        Util.toast("Teleported to " .. selected)
+                        if MovementHandler.settings.method == "Tween" then
+                                TeleportController.status = "Traveling to " .. selected
+                                Util.toast("Traveling to " .. selected .. " (tween)")
+                        else
+                                TeleportController.status = "Teleported to " .. selected
+                                Util.toast("Teleported to " .. selected)
+                        end
                         Logger.info("teleported to " .. selected .. " (" .. location.path .. ")")
                         return true
                 end
@@ -4574,6 +4746,7 @@ do
                                                 AutoDemonController.setEnabled(false)
                                                 AutoBossController.setEnabled(false)
                                                 KillAuraController.setEnabled(false)
+                                                MovementHandler.stop()
                                                 TeleportController.setAutoRefresh(false)
                                                 ClanController.setEnabled(false)
                                                 MovementController.setFly(false)
@@ -4777,7 +4950,17 @@ local function syncAllOff()
         end
 end
 
-do
+-- Tab builders are isolated so one failing element reports loudly instead of blanking every later tab
+local function buildTab(label, builder)
+        local ok, err = pcall(builder)
+        if not ok then
+                Logger.error("UI build failed for " .. label .. " tab: " .. tostring(err))
+                Util.notify("PS2 Hub", label .. " tab failed to build - open Config > Debug for the error", 8)
+        end
+        return ok
+end
+
+buildTab("Home", function()
         HomeTab:CreateSection({ name = "Session" })
 
         Elements.homeGame = HomeTab:CreateText({
@@ -4885,9 +5068,9 @@ do
                         SettingsController.checkUpdate()
                 end,
         })
-end
+end)
 
-do
+buildTab("Universal", function()
         UniversalTab:CreateSection({ name = "Movement" })
 
         local toggleRowA = UniversalTab:CreateGroup()
@@ -5245,9 +5428,9 @@ do
                 end,
         })
         Elements.autoequipToggle = autoequipToggle
-end
+end)
 
-do
+buildTab("Main", function()
         MainTab:CreateSection({ name = "Auto Quest" })
         MainTab:CreateText({
                 name = "Locked",
@@ -5549,27 +5732,28 @@ do
         lockUntilRelease(refreshTargetsButton)
 
         MainTab:CreateSection({ name = "Movement" })
+        -- shared MovementHandler: every automation and the Teleports tab travel through it
         MainTab:CreateDropdown({
                 name = "Movement Method",
-                options = { "Auto", "Magnitize", "Teleport", "Tween", "Walk" },
-                value = "Auto",
-                description = "Auto escalates to teleport when stuck",
+                options = { "Instant", "Tween" },
+                value = "Instant",
+                description = "Instant snaps you to the objective; Tween glides there smoothly. Never walks.",
                 flag = "FarmMoveMethod",
                 callback = function(option)
-                        AutomationController.setMoveMethod(normalizeChoice(option))
+                        MovementHandler.setMethod(normalizeChoice(option))
                 end,
         })
         local moveRow = MainTab:CreateGroup()
         moveRow:CreateSlider({
-                name = "Movement Speed",
-                description = "Used by the Tween method",
+                name = "Tween Speed",
+                description = "Travel speed used by the Tween method",
                 range = { 5, 300 },
                 increment = 1,
                 suffix = " sps",
                 value = 60,
                 flag = "FarmMoveSpeed",
                 callback = function(value)
-                        AutomationController.setMoveSpeed(value)
+                        MovementHandler.setTweenSpeed(value)
                 end,
         })
         moveRow:CreateSlider({
@@ -5580,7 +5764,7 @@ do
                 value = 4,
                 flag = "FarmDistance",
                 callback = function(value)
-                        AutomationController.setDistance(value)
+                        MovementHandler.setArrivalDistance(value)
                 end,
         })
 
@@ -5668,7 +5852,7 @@ do
         })
         MainTab:CreateText({
                 name = "Recovery",
-                text = "Movement methods: Magnitize snaps you behind the target, Walk uses the humanoid, Tween glides. If you rubber-band, the game may validate movement - switch to Walk or move manually.",
+                text = "Movement Method applies to Auto Quest, Auto Demon, Auto Boss and Teleports. Instant teleports directly onto the objective; Tween glides there at the configured speed. If you rubber-band, the game is validating movement - switch methods or move manually.",
         })
 
         -- Game-data dropdowns populate the moment the profile loads
@@ -5727,9 +5911,9 @@ do
                         end
                 end
         end)
-end
+end)
 
-do
+buildTab("Teleports", function()
         TeleportsTab:CreateSection({ name = "Locations" })
         TeleportsTab:CreateText({
                 name = "Location Detection",
@@ -5813,9 +5997,9 @@ do
                         end
                 end
         end)
-end
+end)
 
-do
+buildTab("Auto Spin Clan", function()
         ClanTab:CreateSection({ name = "Auto Spin Clan" })
         ClanTab:CreateText({
                 name = "How It Works",
@@ -6010,9 +6194,9 @@ do
                         end
                 end
         end)
-end
+end)
 
-do
+buildTab("ESP", function()
         EspTab:CreateSection({ name = "ESP" })
         Elements.espStatus = EspTab:CreateText({
                 name = "Status",
@@ -6229,9 +6413,9 @@ do
                         ESPController.setMaxDistance(value)
                 end,
         })
-end
+end)
 
-do
+buildTab("Server", function()
         ServerTab:CreateSection({ name = "Server Actions" })
         local actionRow = ServerTab:CreateGroup()
         actionRow:CreateButton({
@@ -6321,9 +6505,9 @@ do
                         refreshServerInfo()
                 end,
         })
-end
+end)
 
-do
+buildTab("Config", function()
         ConfigTab:CreateSection({ name = "Auto Quest Config" })
         ConfigTab:CreateDropdown({
                 name = "Quest Combat Method",
@@ -6500,7 +6684,8 @@ do
                 end,
         })
         Elements.debugToggle = debugToggle
-        debugRow:CreateDropdown({
+        -- dropdowns cannot live inside a row group in Rayfield Gen2 (rows only hold button/toggle/stat/slider)
+        ConfigTab:CreateDropdown({
                 name = "Minimum Level",
                 options = { "INFO", "WARN", "ERROR" },
                 value = "INFO",
@@ -6614,9 +6799,9 @@ do
                         SettingsController.copySource()
                 end,
         })
-end
+end)
 
-do
+buildTab("Settings", function()
         SettingsTab:CreateSection({ name = "Configuration" })
         local configDropdown
         local configName
@@ -6772,7 +6957,10 @@ do
                         end)
                 end,
         })
-end
+end)
 
 Logger.info("PS2 Hub " .. VERSION .. " loaded")
 Util.notify("PS2 Hub", "Loaded v" .. VERSION .. " - game status: " .. GameDetector.getStatusText(), 4)
+
+-- must stay last: fires the game profile after every controller and UI onLoad handler registered
+GameDetector.ensureLoaded()
