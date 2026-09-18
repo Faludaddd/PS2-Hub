@@ -1,4 +1,4 @@
-local VERSION = "2.4.0"
+local VERSION = "2.5.0"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
@@ -341,6 +341,19 @@ do
                                 window:Notify({
                                         title = title or "PS2 Hub",
                                         content = content or "",
+                                        duration = duration or State.get("notifDuration", 3),
+                                })
+                        end)
+                end
+        end
+
+        function Util.toast(title, duration)
+                if State.get("notifications") == false then return end
+                local window = _G.RayfieldInstance
+                if window and window.Toast then
+                        pcall(function()
+                                window:Toast({
+                                        title = title or "PS2 Hub",
                                         duration = duration or State.get("notifDuration", 3),
                                 })
                         end)
@@ -3056,6 +3069,199 @@ do
         end
 end
 
+local LocationDetector = {}
+do
+        LocationDetector.scanning = false
+        local locations = {}
+        local seenNames = {}
+
+        local function cleanName(raw)
+                local name = Util.trim(raw)
+                if name == "" then
+                        return nil
+                end
+                return name
+        end
+
+        function LocationDetector.addLocation(name, source, path)
+                local clean = cleanName(name)
+                if clean == nil or seenNames[clean] then
+                        return false
+                end
+                seenNames[clean] = true
+                table.insert(locations, {
+                        name = clean,
+                        source = source or "scan",
+                        path = path or "",
+                })
+                return true
+        end
+
+        function LocationDetector.reset()
+                locations = {}
+                seenNames = {}
+        end
+
+        function LocationDetector.ScanLocations()
+                local found = {}
+                local points = GameProfile.data.teleportPoints
+                if type(points) ~= "table" then
+                        return found
+                end
+                if #points > 0 then
+                        for _, point in ipairs(points) do
+                                if type(point) == "table" then
+                                        table.insert(found, {
+                                                name = point.name or point.Name,
+                                                path = point.path or point.Path or "",
+                                        })
+                                else
+                                        table.insert(found, { name = point, path = "" })
+                                end
+                        end
+                else
+                        for name, path in pairs(points) do
+                                if type(name) == "string" then
+                                        table.insert(found, {
+                                                name = name,
+                                                path = type(path) == "string" and path or "",
+                                        })
+                                end
+                        end
+                end
+                return found
+        end
+
+        function LocationDetector.GetLocations()
+                local list = {}
+                for _, entry in ipairs(locations) do
+                        table.insert(list, entry.name)
+                end
+                return list
+        end
+
+        function LocationDetector.getLocationCount()
+                return #locations
+        end
+
+        function LocationDetector.findLocation(name)
+                for _, entry in ipairs(locations) do
+                        if entry.name == name then
+                                return entry
+                        end
+                end
+                return nil
+        end
+end
+
+local TeleportController = {}
+do
+        TeleportController.settings = {
+                selectedLocation = "",
+                autoRefresh = false,
+        }
+        TeleportController.status = "Ready"
+        local AUTO_REFRESH_INTERVAL = 30
+        local scanAnnounced = false
+        local teleportAnnounced = false
+        local locationsChanged = function() end
+
+        function TeleportController.onLocationsChanged(fn)
+                if type(fn) == "function" then
+                        locationsChanged = fn
+                end
+        end
+
+        function TeleportController.setSelectedLocation(name)
+                TeleportController.settings.selectedLocation = name or ""
+                if TeleportController.settings.selectedLocation ~= "" then
+                        TeleportController.status = "Ready"
+                end
+                return TeleportController.settings.selectedLocation
+        end
+
+        function TeleportController.RefreshLocations()
+                if LocationDetector.scanning then
+                        return LocationDetector.getLocationCount()
+                end
+                LocationDetector.scanning = true
+                TeleportController.status = "Scanning map..."
+                local scanned = LocationDetector.ScanLocations()
+                LocationDetector.reset()
+                for _, found in ipairs(scanned) do
+                        LocationDetector.addLocation(found.name, "scan", found.path)
+                end
+                LocationDetector.scanning = false
+                local count = LocationDetector.getLocationCount()
+                TeleportController.status = "Locations found: " .. count
+                if not scanAnnounced then
+                        scanAnnounced = true
+                        Logger.info("location framework ready - Workspace map detection arrives with the game instance file")
+                end
+                Logger.info("location refresh: " .. count .. " location(s)")
+                pcall(locationsChanged, count)
+                return count
+        end
+
+        function TeleportController.TeleportToLocation()
+                local selected = TeleportController.settings.selectedLocation
+                if selected == "" then
+                        TeleportController.status = "Location unavailable"
+                        Util.notify("Teleports", "Select a location first")
+                        return false
+                end
+                local location = LocationDetector.findLocation(selected)
+                if location == nil then
+                        TeleportController.status = "Location unavailable"
+                        Util.notify("Teleports", "That location is not in the current list - refresh and pick again")
+                        return false
+                end
+                TeleportController.status = "Teleporting..."
+                if not GameDetector.requireGame("Teleports") then
+                        TeleportController.status = "Location unavailable"
+                        return false
+                end
+                if not teleportAnnounced then
+                        teleportAnnounced = true
+                        Logger.info("teleport framework armed - movement method arrives with the game instance file")
+                end
+                TeleportController.status = "Location unavailable"
+                Util.notify("Teleports", "Teleport execution arrives with the game instance file")
+                return false
+        end
+
+        function TeleportController.setAutoRefresh(enabled)
+                local want = enabled and true or false
+                if TeleportController.settings.autoRefresh == want then
+                        return want
+                end
+                if enabled then
+                        TeleportController.settings.autoRefresh = true
+                        Tracker.setRunning("tpautorefresh", true)
+                        task.spawn(function()
+                                while Tracker.isRunning("tpautorefresh") do
+                                        task.wait(AUTO_REFRESH_INTERVAL)
+                                        if Tracker.isRunning("tpautorefresh") then
+                                                TeleportController.RefreshLocations()
+                                        end
+                                end
+                        end)
+                        return true
+                end
+                TeleportController.settings.autoRefresh = false
+                Tracker.setRunning("tpautorefresh", false)
+                return true
+        end
+
+        function TeleportController.getLocationOptions()
+                return LocationDetector.GetLocations()
+        end
+
+        function TeleportController.getStatusText()
+                return TeleportController.status
+        end
+end
+
 local SettingsController = {}
 do
                 local lightingBackup = nil
@@ -3327,6 +3533,7 @@ do
                                                 AutoDemonController.setEnabled(false)
                                                 AutoBossController.setEnabled(false)
                                                 KillAuraController.setEnabled(false)
+                                                TeleportController.setAutoRefresh(false)
                                                 ClanController.setEnabled(false)
                                                 MovementController.setFly(false)
                                                 MovementController.setNoclip(false)
@@ -3428,12 +3635,21 @@ ESPController.init()
 ServerController.init()
 SettingsController.startFpsCounter()
 
+pcall(function()
+        Window:CreateSection({ name = "General" })
+end)
 local HomeTab = Window:CreateTab({ name = "Home" })
 local UniversalTab = Window:CreateTab({ name = "Universal" })
-local MainTab = Window:CreateTab({ name = "Main" })
-local ClanTab = Window:CreateTab({ name = "Clan" })
 local EspTab = Window:CreateTab({ name = "ESP" })
 local ServerTab = Window:CreateTab({ name = "Server" })
+pcall(function()
+        Window:CreateSection({ name = "Game" })
+end)
+local MainTab = Window:CreateTab({ name = "Main" })
+local ClanTab = Window:CreateTab({ name = "Clan" })
+pcall(function()
+        Window:CreateSection({ name = "System" })
+end)
 local SettingsTab = Window:CreateTab({ name = "Settings" })
 local UiSettingsTab = Window:CreateTab({ name = "UI Settings" })
 
@@ -3508,7 +3724,7 @@ local function syncAllOff()
         local keys = {
                 "flyToggle", "noclipToggle", "infjumpToggle", "sprintToggle", "lockstatsToggle",
                 "clicktpToggle", "godToggle", "antiafkToggle", "followToggle", "autoequipToggle",
-                "autoQuestToggle", "autoDemonToggle", "autoBossToggle", "killAuraToggle", "clanToggle", "espPlayersToggle", "espNpcsToggle",
+                "autoQuestToggle", "autoDemonToggle", "autoBossToggle", "killAuraToggle", "teleportAutoRefresh", "clanToggle", "espPlayersToggle", "espNpcsToggle",
                 "espBossesToggle", "espQuestToggle", "espItemsToggle", "fullbrightToggle",
         }
         for _, key in ipairs(keys) do
@@ -3616,7 +3832,7 @@ do
         HomeTab:CreateSection({ name = "Game Support" })
         HomeTab:CreateText({
                 name = "Project Slayers 2",
-                text = "Game-specific features (Auto Quest, Auto Demon, Auto Boss, Kill Aura, Clan Reroll) stay locked until the game releases and the instance data is added. Universal features work in every game.",
+                text = "Game-specific features (Auto Quest, Auto Demon, Auto Boss, Kill Aura, Clan Reroll) stay locked until the game releases and the instance data is added. Teleports runs as a framework now and fills its location list once the map detection arrives. Universal features work in every game.",
         })
         HomeTab:CreateButton({
                 name = "Check for Updates",
@@ -3950,6 +4166,7 @@ do
                 name = "Select Tool",
                 options = ToolController.getToolNames(),
                 placeholder = "None",
+                description = "Type to search - refreshes when your tools change",
                 forgetState = true,
                 callback = function(option)
                         ToolController.select(normalizeChoice(option))
@@ -3989,7 +4206,7 @@ do
         MainTab:CreateSection({ name = "Auto Quest" })
         MainTab:CreateText({
                 name = "Locked",
-                text = "Auto Quest, Auto Demon and Auto Boss need Project Slayers 2 instance data (quests, NPCs, bosses, Spider Lilies, remotes). They unlock automatically once the game profile is loaded after release.",
+                text = "Auto Quest, Auto Demon and Auto Boss need Project Slayers 2 instance data (quests, NPCs, bosses, Spider Lilies, remotes) and unlock automatically once the game profile loads. Teleports is live as a framework - it finds no locations until the map detection arrives with the instance file.",
         })
         local autoQuestToggle
         autoQuestToggle = MainTab:CreateToggle({
@@ -4021,8 +4238,9 @@ do
                         AutoQuestController.setQuest(normalizeChoice(option))
                 end,
         })
+        local questRow = MainTab:CreateGroup()
         local questDetectToggle
-        questDetectToggle = MainTab:CreateToggle({
+        questDetectToggle = questRow:CreateToggle({
                 name = "Auto Detect Quest",
                 description = "Picks the quest that fits your current level",
                 value = true,
@@ -4032,7 +4250,6 @@ do
                 end,
         })
         Elements.questDetectToggle = questDetectToggle
-        local questRow = MainTab:CreateGroup()
         local autoAcceptToggle
         autoAcceptToggle = questRow:CreateToggle({
                 name = "Auto Accept",
@@ -4053,21 +4270,12 @@ do
                 end,
         })
         Elements.autoTurnInToggle = autoTurnInToggle
-        Elements.questName = MainTab:CreateText({
-                name = "Current Quest",
-                text = AutoQuestController.getQuestText(),
-        })
-        Elements.questTarget = MainTab:CreateText({
-                name = "Current Target",
-                text = AutoQuestController.getTargetText(),
-        })
-        Elements.questProgress = MainTab:CreateText({
-                name = "Quest Progress",
-                text = AutoQuestController.getProgressText(),
-        })
-        Elements.questStatus = MainTab:CreateText({
+        Elements.questBlock = MainTab:CreateText({
                 name = "Quest Status",
-                text = AutoQuestController.getStatusText(),
+                text = "State: " .. AutoQuestController.getStatusText()
+                        .. "\nQuest: " .. AutoQuestController.getQuestText()
+                        .. "\nTarget: " .. AutoQuestController.getTargetText()
+                        .. "\nProgress: " .. AutoQuestController.getProgressText(),
         })
         local questActionRow = MainTab:CreateGroup()
         local refreshQuestsButton
@@ -4127,20 +4335,14 @@ do
                 end,
         })
         Elements.collectToggle = collectToggle
-        Elements.demonStatus = MainTab:CreateText({
+        Elements.demonBlock = MainTab:CreateText({
                 name = "Spider Lily Status",
-                text = AutoDemonController.getStatusText(),
-        })
-        Elements.demonLily = MainTab:CreateText({
-                name = "Current Spider Lily",
-                text = AutoDemonController.getLilyText(),
+                text = "State: " .. AutoDemonController.getStatusText()
+                        .. "\nCurrent: " .. AutoDemonController.getLilyText()
+                        .. "\nDetection: " .. AutoDemonController.getDetectionText(),
         })
         local demonStatRow = MainTab:CreateGroup()
         Elements.statLilies = demonStatRow:CreateStat({ name = "Spider Lilies Collected", value = 0 })
-        Elements.demonDetection = MainTab:CreateText({
-                name = "Detection Status",
-                text = AutoDemonController.getDetectionText(),
-        })
 
         MainTab:CreateSection({ name = "Auto Boss" })
         local autoBossToggle
@@ -4172,8 +4374,9 @@ do
                         AutoBossController.setBoss(normalizeChoice(option))
                 end,
         })
+        local bossOptionsRow = MainTab:CreateGroup()
         local bossAttackToggle
-        bossAttackToggle = MainTab:CreateToggle({
+        bossAttackToggle = bossOptionsRow:CreateToggle({
                 name = "Auto Attack Boss",
                 value = false,
                 flag = "BossAutoAttack",
@@ -4183,7 +4386,7 @@ do
         })
         Elements.bossAttackToggle = bossAttackToggle
         local bossDetectToggle
-        bossDetectToggle = MainTab:CreateToggle({
+        bossDetectToggle = bossOptionsRow:CreateToggle({
                 name = "Boss Detection",
                 value = false,
                 flag = "BossDetection",
@@ -4192,13 +4395,10 @@ do
                 end,
         })
         Elements.bossDetectToggle = bossDetectToggle
-        Elements.bossName = MainTab:CreateText({
-                name = "Current Boss",
-                text = AutoBossController.getBossText(),
-        })
-        Elements.bossStatus = MainTab:CreateText({
+        Elements.bossBlock = MainTab:CreateText({
                 name = "Boss Status",
-                text = AutoBossController.getStatusText(),
+                text = "State: " .. AutoBossController.getStatusText()
+                        .. "\nBoss: " .. AutoBossController.getBossText(),
         })
         Elements.bossHealth = tryCreate(MainTab, "CreateProgress", {
                 name = "Boss Health",
@@ -4225,6 +4425,69 @@ do
                 end,
         })
         lockUntilRelease(refreshBossesButton)
+
+        tryCreate(MainTab, "CreateDivider", {})
+
+        MainTab:CreateSection({ name = "Teleports" })
+        local locationDropdown
+        locationDropdown = MainTab:CreateDropdown({
+                name = "Location",
+                options = TeleportController.getLocationOptions(),
+                placeholder = "Select Location",
+                description = "Type to search - filled automatically by the map scan",
+                forgetState = true,
+                callback = function(option)
+                        TeleportController.setSelectedLocation(normalizeChoice(option))
+                end,
+        })
+        TeleportController.onLocationsChanged(function()
+                pcall(function()
+                        locationDropdown:Refresh(TeleportController.getLocationOptions())
+                end)
+        end)
+        local syncLocationStatus = function() end
+        local teleportRow = MainTab:CreateGroup()
+        teleportRow:CreateButton({
+                name = "Refresh Locations",
+                callback = function()
+                        task.spawn(function()
+                                local count = TeleportController.RefreshLocations()
+                                Util.toast("Locations found: " .. count)
+                                syncLocationStatus()
+                        end)
+                end,
+        })
+        teleportRow:CreateButton({
+                name = "Teleport",
+                callback = function()
+                        task.spawn(function()
+                                TeleportController.TeleportToLocation()
+                                syncLocationStatus()
+                        end)
+                end,
+        })
+        local teleportAutoRefreshToggle
+        teleportAutoRefreshToggle = MainTab:CreateToggle({
+                name = "Auto Refresh Locations",
+                description = "Re-scans the map every 30 s while enabled",
+                value = false,
+                flag = "TeleportAutoRefresh",
+                callback = function(value)
+                        TeleportController.setAutoRefresh(value)
+                end,
+        })
+        Elements.teleportAutoRefresh = teleportAutoRefreshToggle
+        Elements.locationStatus = MainTab:CreateText({
+                name = "Location Status",
+                text = TeleportController.getStatusText(),
+        })
+        syncLocationStatus = function()
+                pcall(function()
+                        Elements.locationStatus:Set(TeleportController.getStatusText())
+                end)
+        end
+
+        tryCreate(MainTab, "CreateDivider", {})
 
         MainTab:CreateSection({ name = "Targets" })
         local targetDropdown = MainTab:CreateDropdown({
@@ -4411,6 +4674,9 @@ do
                 pcall(function()
                         bossDropdown:Refresh(AutoBossController.getBossOptions())
                 end)
+                task.spawn(function()
+                        TeleportController.RefreshLocations()
+                end)
         end)
 
         Tracker.setRunning("automationstatus", true)
@@ -4428,16 +4694,17 @@ do
                 local lastBossHealth = -1
                 while Tracker.isRunning("automationstatus") do
                         task.wait(2)
-                        syncText("questName", AutoQuestController.getQuestText())
-                        syncText("questTarget", AutoQuestController.getTargetText())
-                        syncText("questProgress", AutoQuestController.getProgressText())
-                        syncText("questStatus", AutoQuestController.getStatusText())
-                        syncText("demonStatus", AutoDemonController.getStatusText())
-                        syncText("demonLily", AutoDemonController.getLilyText())
-                        syncText("demonDetection", AutoDemonController.getDetectionText())
-                        syncText("bossName", AutoBossController.getBossText())
-                        syncText("bossStatus", AutoBossController.getStatusText())
+                        syncText("questBlock", "State: " .. AutoQuestController.getStatusText()
+                                .. "\nQuest: " .. AutoQuestController.getQuestText()
+                                .. "\nTarget: " .. AutoQuestController.getTargetText()
+                                .. "\nProgress: " .. AutoQuestController.getProgressText())
+                        syncText("demonBlock", "State: " .. AutoDemonController.getStatusText()
+                                .. "\nCurrent: " .. AutoDemonController.getLilyText()
+                                .. "\nDetection: " .. AutoDemonController.getDetectionText())
+                        syncText("bossBlock", "State: " .. AutoBossController.getStatusText()
+                                .. "\nBoss: " .. AutoBossController.getBossText())
                         syncText("killAuraStatus", KillAuraController.getStatusText())
+                        syncText("locationStatus", TeleportController.getStatusText())
                         local lilies = AutoDemonController.getCollected()
                         if lilies ~= lastLilies then
                                 lastLilies = lilies
@@ -4937,6 +5204,8 @@ do
                 text = KillAuraController.getStatusText(),
         })
 
+        tryCreate(SettingsTab, "CreateDivider", {})
+
         SettingsTab:CreateSection({ name = "Performance" })
         SettingsTab:CreateDropdown({
                 name = "FPS Boost",
@@ -5175,7 +5444,11 @@ do
                                         ok = Window:Save()
                                 end
                         end)
-                        Util.notify("Configs", ok and ("Saved " .. (name ~= "" and name or "default")) or "Save failed")
+                        if ok then
+                                Util.toast("Saved " .. (name ~= "" and name or "default"))
+                        else
+                                Util.notify("Configs", "Save failed")
+                        end
                         refreshConfigs()
                 end,
         })
@@ -5192,7 +5465,11 @@ do
                                         ok = Window:Load()
                                 end
                         end)
-                        Util.notify("Configs", ok and ("Loaded " .. (name ~= "" and name or "default")) or "Load failed - check the name")
+                        if ok then
+                                Util.toast("Loaded " .. (name ~= "" and name or "default"))
+                        else
+                                Util.notify("Configs", "Load failed - check the name")
+                        end
                 end,
         })
         manageRow:CreateButton({
@@ -5207,7 +5484,11 @@ do
                         pcall(function()
                                 ok = Window:DeleteConfig(name)
                         end)
-                        Util.notify("Configs", ok and ("Deleted " .. name) or "Delete failed - check the name")
+                        if ok then
+                                Util.toast("Deleted " .. name)
+                        else
+                                Util.notify("Configs", "Delete failed - check the name")
+                        end
                         refreshConfigs()
                 end,
         })
