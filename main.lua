@@ -1,4 +1,4 @@
-local VERSION = "2.3.0"
+local VERSION = "2.4.0"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
@@ -19,7 +19,6 @@ local TeleportService = GetService("TeleportService")
 local HttpService = GetService("HttpService")
 local Stats = GetService("Stats")
 local CoreGui = GetService("CoreGui")
-local TweenService = GetService("TweenService")
 
 local LocalPlayer = Players.LocalPlayer
 
@@ -390,6 +389,8 @@ do
                                 quests = {},
                                 remotes = {},
                                 mobs = {},
+                                bosses = {},
+                                spiderLilies = {},
                                 clans = {
                                                 menuGui = "",
                                                 rerollButton = "",
@@ -2075,495 +2076,6 @@ do
         end
 end
 
-local FarmController = {}
-do
-        FarmController.settings = {
-                enabled = false,
-                mode = "Nearest",
-                target = "",
-                exclusions = {},
-                maxRange = 2000,
-                moveMethod = "Magnitize",
-                moveSpeed = 60,
-                distance = 4,
-                interactMode = "Auto",
-                interactDelay = 0.5,
-                interactRange = 10,
-                autoAttack = false,
-                autoQuest = false,
-                autoAccept = true,
-                autoTurnIn = true,
-                attackDelay = 0.35,
-                scanInterval = 2,
-                tickInterval = 0.25,
-        }
-
-        local function findTargets()
-                local mobNames = GameProfile.data.mobs
-                local list = {}
-                if type(mobNames) ~= "table" or #mobNames == 0 then
-                        return list
-                end
-                local playerChars = {}
-                for _, player in ipairs(Players:GetPlayers()) do
-                        if player.Character then
-                                playerChars[player.Character] = true
-                        end
-                end
-                local myRoot = Util.getRoot()
-                local exclusions = FarmController.settings.exclusions
-                local scanned = 0
-                local function scanContainer(container, depth)
-                        if depth > 3 or scanned > 2500 then
-                                return
-                        end
-                        for _, child in ipairs(container:GetChildren()) do
-                                scanned += 1
-                                if child:IsA("Model") and not playerChars[child] then
-                                        local humanoid = child:FindFirstChildOfClass("Humanoid")
-                                        if humanoid and humanoid.Health > 0 then
-                                                local matched = false
-                                                for _, name in ipairs(mobNames) do
-                                                        if child.Name == name or child.Name:find(name) then
-                                                                matched = true
-                                                                break
-                                                        end
-                                                end
-                                                local root = child:FindFirstChild("HumanoidRootPart") or child.PrimaryPart
-                                                if matched and root then
-                                                        local inRange = not myRoot or (root.Position - myRoot.Position).Magnitude <= FarmController.settings.maxRange
-                                                        local excluded = false
-                                                        for _, ex in ipairs(exclusions) do
-                                                                if ex ~= "" and (child.Name == ex or child.Name:find(ex)) then
-                                                                        excluded = true
-                                                                        break
-                                                                end
-                                                        end
-                                                        if inRange and not excluded then
-                                                                table.insert(list, { model = child, humanoid = humanoid })
-                                                        end
-                                                end
-                                        end
-                                        scanContainer(child, depth + 1)
-                                elseif child:IsA("Folder") then
-                                        scanContainer(child, depth + 1)
-                                end
-                        end
-                end
-                scanContainer(Workspace, 1)
-                return list
-        end
-
-        local function pickTarget(list)
-                if #list == 0 then
-                        return nil
-                end
-                local myRoot = Util.getRoot()
-                local mode = FarmController.settings.mode
-                if mode == "Selected" and FarmController.settings.target ~= "" then
-                        for _, entry in ipairs(list) do
-                                if entry.model.Name == FarmController.settings.target then
-                                        return entry
-                                end
-                        end
-                        return nil
-                end
-                if mode == "Lowest HP" then
-                        local best = list[1]
-                        for _, entry in ipairs(list) do
-                                if entry.humanoid.Health < best.humanoid.Health then
-                                        best = entry
-                                end
-                        end
-                        return best
-                end
-                if mode == "Boss" then
-                        local best = nil
-                        local bestHealth = -1
-                        for _, entry in ipairs(list) do
-                                if entry.humanoid.MaxHealth > bestHealth then
-                                        bestHealth = entry.humanoid.MaxHealth
-                                        best = entry
-                                end
-                        end
-                        return best
-                end
-                if mode == "Smart" and myRoot then
-                        local best = nil
-                        local bestScore = math.huge
-                        for _, entry in ipairs(list) do
-                                local root = entry.model:FindFirstChild("HumanoidRootPart") or entry.model.PrimaryPart
-                                if root then
-                                        local dist = (root.Position - myRoot.Position).Magnitude
-                                        local healthRatio = entry.humanoid.MaxHealth > 0 and entry.humanoid.Health / entry.humanoid.MaxHealth or 1
-                                        local score = dist * (0.4 + 0.6 * healthRatio)
-                                        if score < bestScore then
-                                                bestScore = score
-                                                best = entry
-                                        end
-                                end
-                        end
-                        return best
-                end
-                local best = list[1]
-                local bestDist = math.huge
-                if myRoot then
-                        for _, entry in ipairs(list) do
-                                local root = entry.model:FindFirstChild("HumanoidRootPart") or entry.model.PrimaryPart
-                                if root then
-                                        local d = (root.Position - myRoot.Position).Magnitude
-                                        if d < bestDist then
-                                                bestDist = d
-                                                best = entry
-                                        end
-                                end
-                        end
-                end
-                return best
-        end
-
-        local function moveTo(targetRoot)
-                local myRoot = Util.getRoot()
-                if not myRoot then
-                        return
-                end
-                local dist = FarmController.settings.distance
-                local method = FarmController.settings.moveMethod
-                local offset = myRoot.Position - targetRoot.Position
-                local dir = offset.Magnitude > 0.001 and offset.Unit or Vector3.zAxis
-                if method == "Teleport" then
-                        myRoot.CFrame = targetRoot.CFrame * CFrame.new(0, 0, dist)
-                elseif method == "Tween" then
-                        local goal = CFrame.new(targetRoot.Position + dir * dist, targetRoot.Position)
-                        local travel = math.max((myRoot.Position - goal.Position).Magnitude, 0.1)
-                        local duration = travel / math.max(FarmController.settings.moveSpeed, 1)
-                        local tween = TweenService:Create(myRoot, TweenInfo.new(duration, Enum.EasingStyle.Linear), { CFrame = goal })
-                        tween:Play()
-                elseif method == "Walk" then
-                        local humanoid = Util.getHumanoid()
-                        if humanoid then
-                                humanoid:MoveTo(targetRoot.Position + dir * dist)
-                        end
-                else
-                        myRoot.CFrame = CFrame.new(targetRoot.Position + dir * dist, targetRoot.Position)
-                end
-        end
-
-        local executorNotified = false
-
-        local function interactWithModel(model)
-                local mode = FarmController.settings.interactMode
-                if mode == "Off" then
-                        return false
-                end
-                local root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
-                if not root then
-                        return false
-                end
-                local myRoot = Util.getRoot()
-                if not myRoot or (root.Position - myRoot.Position).Magnitude > FarmController.settings.interactRange then
-                        return false
-                end
-                local usePrompt = mode == "Auto" or mode == "ProximityPrompt"
-                local useClick = mode == "Auto" or mode == "ClickDetector"
-                local fired = false
-                if usePrompt then
-                        for _, d in ipairs(model:GetDescendants()) do
-                                if d:IsA("ProximityPrompt") then
-                                        if fireproximityprompt then
-                                                pcall(fireproximityprompt, d)
-                                                fired = true
-                                        elseif not executorNotified then
-                                                executorNotified = true
-                                                Logger.warn("fireproximityprompt not available on this executor")
-                                        end
-                                end
-                        end
-                end
-                if useClick and not fired then
-                        for _, d in ipairs(model:GetDescendants()) do
-                                if d:IsA("ClickDetector") then
-                                        if fireclickdetector then
-                                                pcall(fireclickdetector, d)
-                                                fired = true
-                                        elseif not executorNotified then
-                                                executorNotified = true
-                                                Logger.warn("fireclickdetector not available on this executor")
-                                        end
-                                end
-                        end
-                end
-                return fired
-        end
-
-        local function attack()
-                local humanoid = Util.getHumanoid()
-                if not humanoid then
-                        return
-                end
-                local tool = Util.getEquippedTool()
-                if not tool then
-                        local tools = Util.getTools()
-                        if #tools > 0 then
-                                humanoid:EquipTool(tools[1])
-                                tool = tools[1]
-                                task.wait(0.1)
-                        end
-                end
-                if tool then
-                        tool:Activate()
-                end
-        end
-
-        FarmController.lastTargetName = ""
-        FarmController.lastTargetHealthPct = 0
-
-        local function farmLoop()
-                local lastScanAt = 0
-                local cachedList = {}
-                local lastPos = nil
-                local stuckTicks = 0
-                local lastAttackAt = 0
-                while Tracker.isRunning("farm") do
-                        task.wait(math.max(FarmController.settings.tickInterval, 0.05))
-                        if not Util.isAlive() then
-                                task.wait(1)
-                        else
-                                local now = os.clock()
-                                if now - lastScanAt >= FarmController.settings.scanInterval then
-                                        lastScanAt = now
-                                        cachedList = findTargets()
-                                end
-                                local target = pickTarget(cachedList)
-                                if target then
-                                        FarmController.lastTargetName = target.model.Name
-                                        if target.humanoid.MaxHealth > 0 then
-                                                FarmController.lastTargetHealthPct = math.clamp(target.humanoid.Health / target.humanoid.MaxHealth, 0, 1) * 100
-                                        else
-                                                FarmController.lastTargetHealthPct = 0
-                                        end
-                                        local root = target.model:FindFirstChild("HumanoidRootPart") or target.model.PrimaryPart
-                                        if root then
-                                                local myRoot = Util.getRoot()
-                                                if myRoot then
-                                                        if lastPos then
-                                                                local moved = (myRoot.Position - lastPos).Magnitude
-                                                                if moved < 0.5 then
-                                                                        stuckTicks += 1
-                                                                else
-                                                                        stuckTicks = 0
-                                                                end
-                                                        end
-                                                        lastPos = myRoot.Position
-                                                        local method = FarmController.settings.moveMethod
-                                                        if (method == "Auto" or method == "Magnitize") and stuckTicks >= 10 then
-                                                                myRoot.CFrame = root.CFrame * CFrame.new(0, 0, FarmController.settings.distance)
-                                                                stuckTicks = 0
-                                                        else
-                                                                moveTo(root)
-                                                        end
-                                                end
-                                                if FarmController.settings.autoAttack and now - lastAttackAt >= FarmController.settings.attackDelay then
-                                                        lastAttackAt = now
-                                                        attack()
-                                                end
-                                                local interacted = interactWithModel(target.model)
-                                                if interacted and FarmController.settings.interactDelay > 0 then
-                                                        task.wait(FarmController.settings.interactDelay)
-                                                end
-                                        end
-                                else
-                                        task.wait(0.5)
-                                end
-                        end
-                end
-        end
-
-        function FarmController.setEnabled(enabled)
-                local want = enabled and true or false
-                if FarmController.settings.enabled == want then
-                        return want
-                end
-                if enabled then
-                        if not GameDetector.requireGame("Auto Farm") then
-                                return false
-                        end
-                        if type(GameProfile.data.mobs) ~= "table" or #GameProfile.data.mobs == 0 then
-                                Util.notify("Auto Farm", "No mob data in game profile yet")
-                                return false
-                        end
-                        FarmController.settings.enabled = true
-                        Tracker.setRunning("farm", true)
-                        task.spawn(farmLoop)
-                        return true
-                else
-                        FarmController.settings.enabled = false
-                        Tracker.setRunning("farm", false)
-                        return true
-                end
-        end
-
-        function FarmController.setMode(mode)
-                FarmController.settings.mode = mode or "Nearest"
-        end
-
-        function FarmController.setTarget(name)
-                FarmController.settings.target = name or ""
-        end
-
-        function FarmController.setExclusions(selected)
-                local list = {}
-                if type(selected) == "table" then
-                        for _, name in ipairs(selected) do
-                                if name and name ~= "" then
-                                        table.insert(list, name)
-                                end
-                        end
-                end
-                FarmController.settings.exclusions = list
-        end
-
-        function FarmController.setMaxRange(value)
-                FarmController.settings.maxRange = value
-        end
-
-        function FarmController.setMoveMethod(method)
-                FarmController.settings.moveMethod = method or "Magnitize"
-        end
-
-        function FarmController.setMoveSpeed(value)
-                FarmController.settings.moveSpeed = value
-        end
-
-        function FarmController.setDistance(value)
-                FarmController.settings.distance = value
-        end
-
-        function FarmController.setInteractMode(mode)
-                FarmController.settings.interactMode = mode or "Auto"
-        end
-
-        function FarmController.setInteractDelay(value)
-                FarmController.settings.interactDelay = value
-        end
-
-        function FarmController.setInteractRange(value)
-                FarmController.settings.interactRange = value
-        end
-
-        function FarmController.setScanInterval(value)
-                FarmController.settings.scanInterval = math.max(value, 0.5)
-        end
-
-        function FarmController.setTickInterval(value)
-                FarmController.settings.tickInterval = math.max(value, 0.05)
-        end
-
-        function FarmController.setAutoAttack(enabled)
-                FarmController.settings.autoAttack = enabled and true or false
-        end
-
-        function FarmController.setAutoAccept(enabled)
-                FarmController.settings.autoAccept = enabled and true or false
-        end
-
-        function FarmController.setAutoTurnIn(enabled)
-                FarmController.settings.autoTurnIn = enabled and true or false
-        end
-
-        function FarmController.setAutoQuest(enabled)
-                if enabled then
-                        if not GameDetector.requireGame("Auto Quest") then
-                                return false
-                        end
-                        if not GameProfile.data.quests or next(GameProfile.data.quests) == nil then
-                                Util.notify("Auto Quest", "No quest data in game profile yet")
-                                return false
-                        end
-                end
-                FarmController.settings.autoQuest = enabled and true or false
-                return true
-        end
-
-        function FarmController.setAttackDelay(value)
-                FarmController.settings.attackDelay = value
-        end
-
-        function FarmController.getStatusText()
-                if not GameDetector.isGameReady() then
-                        return "Auto Farm locked - PS2 instance data required after release"
-                end
-                if not FarmController.settings.enabled then
-                        return "Auto Farm off"
-                end
-                return "Auto Farm running - mode " .. FarmController.settings.mode
-        end
-
-        function FarmController.scanQuestSystem()
-                local givers = {}
-                local scanned = 0
-                local function scanContainer(container, depth)
-                        if depth > 3 or scanned > 2500 then
-                                return
-                        end
-                        for _, child in ipairs(container:GetChildren()) do
-                                scanned += 1
-                                if child:IsA("Model") then
-                                        local humanoid = child:FindFirstChildOfClass("Humanoid")
-                                        if humanoid then
-                                                local hasDialog = child:FindFirstChildOfClass("Dialog") ~= nil
-                                                local hasPrompt = false
-                                                for _, d in ipairs(child:GetDescendants()) do
-                                                        if d:IsA("ProximityPrompt") then
-                                                                hasPrompt = true
-                                                                break
-                                                        end
-                                                end
-                                                if hasDialog or hasPrompt then
-                                                        table.insert(givers, { name = child.Name, path = child:GetFullName(), dialog = hasDialog, prompt = hasPrompt })
-                                                end
-                                        end
-                                        scanContainer(child, depth + 1)
-                                elseif child:IsA("Folder") then
-                                        scanContainer(child, depth + 1)
-                                end
-                        end
-                end
-                scanContainer(Workspace, 1)
-                local objectives = {}
-                pcall(function()
-                        local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
-                        if not playerGui then
-                                return
-                        end
-                        for _, gui in ipairs(playerGui:GetDescendants()) do
-                                if gui:IsA("TextLabel") and gui.Text ~= "" then
-                                        local lower = gui.Text:lower()
-                                        if lower:find("quest") or lower:find("objective") or lower:find("slay") or lower:find("defeat") or lower:find("collect") then
-                                                table.insert(objectives, { text = gui.Text, path = gui:GetFullName() })
-                                                if #objectives >= 10 then
-                                                        break
-                                                end
-                                        end
-                                end
-                        end
-                end)
-                Logger.info("quest scan: " .. #givers .. " giver candidate(s), " .. #objectives .. " objective label(s)")
-                for i, giver in ipairs(givers) do
-                        if i <= 15 then
-                                local tags = (giver.dialog and " [Dialog]" or "") .. (giver.prompt and " [Prompt]" or "")
-                                Logger.info("  giver " .. string.format("%02d", i) .. ": " .. giver.name .. "  path=" .. giver.path .. tags)
-                        end
-                end
-                for _, objective in ipairs(objectives) do
-                        Logger.info("  objective: \"" .. objective.text .. "\"  path=" .. objective.path)
-                end
-                local summary = #givers .. " giver(s), " .. #objectives .. " objective label(s) - details in the log console"
-                Util.notify("Quest Scan", summary, 6)
-                return summary
-        end
-end
-
 local ClanController = {}
 do
         ClanController.settings = {
@@ -2825,6 +2337,722 @@ do
                 DiscoveryController.lastSummary = #found .. " candidate(s) - details in the log console"
                 Util.notify("Target Dump", DiscoveryController.lastSummary, 6)
                 return DiscoveryController.lastSummary
+        end
+end
+
+local AutomationController = {}
+do
+        AutomationController.settings = {
+                target = "",
+                exclusions = {},
+                maxRange = 2000,
+                moveMethod = "Magnitize",
+                moveSpeed = 60,
+                distance = 4,
+                interactMode = "Auto",
+                interactDelay = 0.5,
+                interactRange = 10,
+                autoAttack = false,
+                attackDelay = 0.35,
+                scanInterval = 2,
+                tickInterval = 0.25,
+        }
+        AutomationController.lastTargetName = ""
+        AutomationController.lastTargetHealthPct = 0
+
+        function AutomationController.setTarget(name)
+                AutomationController.settings.target = name or ""
+        end
+
+        function AutomationController.setExclusions(selected)
+                local list = {}
+                if type(selected) == "table" then
+                        for _, name in ipairs(selected) do
+                                if name and name ~= "" then
+                                        table.insert(list, name)
+                                end
+                        end
+                end
+                AutomationController.settings.exclusions = list
+        end
+
+        function AutomationController.setMaxRange(value)
+                AutomationController.settings.maxRange = value
+        end
+
+        function AutomationController.setMoveMethod(method)
+                AutomationController.settings.moveMethod = method or "Magnitize"
+        end
+
+        function AutomationController.setMoveSpeed(value)
+                AutomationController.settings.moveSpeed = value
+        end
+
+        function AutomationController.setDistance(value)
+                AutomationController.settings.distance = value
+        end
+
+        function AutomationController.setInteractMode(mode)
+                AutomationController.settings.interactMode = mode or "Auto"
+        end
+
+        function AutomationController.setInteractDelay(value)
+                AutomationController.settings.interactDelay = value
+        end
+
+        function AutomationController.setInteractRange(value)
+                AutomationController.settings.interactRange = value
+        end
+
+        function AutomationController.setScanInterval(value)
+                AutomationController.settings.scanInterval = math.max(value, 0.5)
+        end
+
+        function AutomationController.setTickInterval(value)
+                AutomationController.settings.tickInterval = math.max(value, 0.05)
+        end
+
+        function AutomationController.setAutoAttack(enabled)
+                AutomationController.settings.autoAttack = enabled and true or false
+        end
+
+        function AutomationController.setAttackDelay(value)
+                AutomationController.settings.attackDelay = value
+        end
+
+        function AutomationController.getStatusText()
+                if not GameDetector.isGameReady() then
+                        return "Automation locked - PS2 instance data required after release"
+                end
+                return "Automation ready - quest and boss engines arrive with the game instance file"
+        end
+
+        function AutomationController.scanQuestSystem()
+                local givers = {}
+                local scanned = 0
+                local function scanContainer(container, depth)
+                        if depth > 3 or scanned > 2500 then
+                                return
+                        end
+                        for _, child in ipairs(container:GetChildren()) do
+                                scanned += 1
+                                if child:IsA("Model") then
+                                        local humanoid = child:FindFirstChildOfClass("Humanoid")
+                                        if humanoid then
+                                                local hasDialog = child:FindFirstChildOfClass("Dialog") ~= nil
+                                                local hasPrompt = false
+                                                for _, d in ipairs(child:GetDescendants()) do
+                                                        if d:IsA("ProximityPrompt") then
+                                                                hasPrompt = true
+                                                                break
+                                                        end
+                                                end
+                                                if hasDialog or hasPrompt then
+                                                        table.insert(givers, { name = child.Name, path = child:GetFullName(), dialog = hasDialog, prompt = hasPrompt })
+                                                end
+                                        end
+                                        scanContainer(child, depth + 1)
+                                elseif child:IsA("Folder") then
+                                        scanContainer(child, depth + 1)
+                                end
+                        end
+                end
+                scanContainer(Workspace, 1)
+                local objectives = {}
+                pcall(function()
+                        local playerGui = LocalPlayer:FindFirstChild("PlayerGui")
+                        if not playerGui then
+                                return
+                        end
+                        for _, gui in ipairs(playerGui:GetDescendants()) do
+                                if gui:IsA("TextLabel") and gui.Text ~= "" then
+                                        local lower = gui.Text:lower()
+                                        if lower:find("quest") or lower:find("objective") or lower:find("slay") or lower:find("defeat") or lower:find("collect") then
+                                                table.insert(objectives, { text = gui.Text, path = gui:GetFullName() })
+                                                if #objectives >= 10 then
+                                                        break
+                                                end
+                                        end
+                                end
+                        end
+                end)
+                Logger.info("quest scan: " .. #givers .. " giver candidate(s), " .. #objectives .. " objective label(s)")
+                for i, giver in ipairs(givers) do
+                        if i <= 15 then
+                                local tags = (giver.dialog and " [Dialog]" or "") .. (giver.prompt and " [Prompt]" or "")
+                                Logger.info("  giver " .. string.format("%02d", i) .. ": " .. giver.name .. "  path=" .. giver.path .. tags)
+                        end
+                end
+                for _, objective in ipairs(objectives) do
+                        Logger.info("  objective: \"" .. objective.text .. "\"  path=" .. objective.path)
+                end
+                local summary = #givers .. " giver(s), " .. #objectives .. " objective label(s) - details in the log console"
+                Util.notify("Quest Scan", summary, 6)
+                return summary
+        end
+end
+
+local QuestDetector = {}
+do
+        QuestDetector.status = "Idle"
+
+        function QuestDetector.getPlayerLevel()
+                return nil
+        end
+
+        function QuestDetector.findQuestGivers()
+                return {}
+        end
+
+        function QuestDetector.selectQuestForLevel(level)
+                return nil
+        end
+
+        function QuestDetector.hasQuestData()
+                local quests = GameProfile.data.quests
+                return type(quests) == "table" and next(quests) ~= nil
+        end
+
+        function QuestDetector.getQuestOptions()
+                local quests = GameProfile.data.quests
+                local list = {}
+                if type(quests) ~= "table" then
+                        return list
+                end
+                if #quests > 0 then
+                        for _, quest in ipairs(quests) do
+                                local label = type(quest) == "table" and (quest.name or quest.Name) or nil
+                                table.insert(list, label or tostring(quest))
+                        end
+                else
+                        for name in pairs(quests) do
+                                table.insert(list, name)
+                        end
+                        table.sort(list)
+                end
+                return list
+        end
+end
+
+local BossDetector = {}
+do
+        BossDetector.status = "Idle"
+
+        function BossDetector.hasBossData()
+                local bosses = GameProfile.data.bosses
+                return type(bosses) == "table" and next(bosses) ~= nil
+        end
+
+        function BossDetector.getBossOptions()
+                local bosses = GameProfile.data.bosses
+                local list = {}
+                if type(bosses) ~= "table" then
+                        return list
+                end
+                if #bosses > 0 then
+                        for _, boss in ipairs(bosses) do
+                                local label = type(boss) == "table" and (boss.name or boss.Name) or nil
+                                table.insert(list, label or tostring(boss))
+                        end
+                else
+                        for name in pairs(bosses) do
+                                table.insert(list, name)
+                        end
+                        table.sort(list)
+                end
+                return list
+        end
+
+        function BossDetector.scan()
+                return {}
+        end
+end
+
+local SpiderLilyDetector = {}
+do
+        SpiderLilyDetector.status = "Idle"
+
+        function SpiderLilyDetector.hasSpiderLilyData()
+                local lilies = GameProfile.data.spiderLilies
+                return type(lilies) == "table" and next(lilies) ~= nil
+        end
+
+        function SpiderLilyDetector.scan()
+                return {}
+        end
+
+        function SpiderLilyDetector.getDetectedCount()
+                return 0
+        end
+end
+
+local CombatHandler = {}
+do
+        CombatHandler.questMethod = "Melee"
+        CombatHandler.bossMethod = "Melee"
+        local combatNotified = false
+
+        local function validMethod(method)
+                return method == "Melee" or method == "Sword"
+        end
+
+        function CombatHandler.setQuestMethod(method)
+                if validMethod(method) then
+                        CombatHandler.questMethod = method
+                end
+                return CombatHandler.questMethod
+        end
+
+        function CombatHandler.setBossMethod(method)
+                if validMethod(method) then
+                        CombatHandler.bossMethod = method
+                end
+                return CombatHandler.bossMethod
+        end
+
+        function CombatHandler.attack(target)
+                if target == nil then
+                        return false
+                end
+                if not combatNotified then
+                        combatNotified = true
+                        Logger.info("combat handler armed - attack logic pending the game instance file")
+                end
+                return false
+        end
+end
+
+local AutoQuestController = {}
+do
+        AutoQuestController.STATUS_STATES = {
+                "Disabled",
+                "Searching for Quest",
+                "Quest Found",
+                "Quest Active",
+                "Completing Quest",
+                "No Suitable Quest Found",
+        }
+        AutoQuestController.settings = {
+                enabled = false,
+                selectedQuest = "Auto Detect",
+                autoDetect = true,
+                autoAccept = true,
+                autoTurnIn = true,
+        }
+        AutoQuestController.status = {
+                state = "Disabled",
+                quest = "None",
+                target = "None",
+                progress = "-",
+                healthPct = 0,
+        }
+        AutoQuestController.currentTarget = nil
+
+        local function validState(state)
+                for _, known in ipairs(AutoQuestController.STATUS_STATES) do
+                        if known == state then
+                                return true
+                        end
+                end
+                return false
+        end
+
+        function AutoQuestController.setState(state)
+                if validState(state) then
+                        AutoQuestController.status.state = state
+                end
+                return AutoQuestController.status.state
+        end
+
+        function AutoQuestController.resetStatus()
+                AutoQuestController.status.state = "Disabled"
+                AutoQuestController.status.quest = "None"
+                AutoQuestController.status.target = "None"
+                AutoQuestController.status.progress = "-"
+                AutoQuestController.status.healthPct = 0
+                AutoQuestController.currentTarget = nil
+        end
+
+        local function autoQuestLoop()
+                local announced = false
+                while Tracker.isRunning("autoquest") do
+                        task.wait(1)
+                        if not announced then
+                                announced = true
+                                Logger.info("auto quest placeholder running - engine logic arrives with the game instance file")
+                        end
+                        if QuestDetector.hasQuestData() then
+                                AutoQuestController.setState("Searching for Quest")
+                        else
+                                AutoQuestController.setState("No Suitable Quest Found")
+                        end
+                end
+        end
+
+        function AutoQuestController.setEnabled(enabled)
+                local want = enabled and true or false
+                if AutoQuestController.settings.enabled == want then
+                        return want
+                end
+                if enabled then
+                        if not GameDetector.requireGame("Auto Quest") then
+                                return false
+                        end
+                        if not QuestDetector.hasQuestData() then
+                                Util.notify("Auto Quest", "No quest data in game profile yet")
+                                return false
+                        end
+                        AutoQuestController.settings.enabled = true
+                        AutoQuestController.setState("Searching for Quest")
+                        Tracker.setRunning("autoquest", true)
+                        task.spawn(autoQuestLoop)
+                        return true
+                end
+                AutoQuestController.settings.enabled = false
+                Tracker.setRunning("autoquest", false)
+                AutoQuestController.resetStatus()
+                return true
+        end
+
+        function AutoQuestController.setQuest(name)
+                AutoQuestController.settings.selectedQuest = name or "Auto Detect"
+        end
+
+        function AutoQuestController.setAutoDetect(enabled)
+                AutoQuestController.settings.autoDetect = enabled and true or false
+        end
+
+        function AutoQuestController.setAutoAccept(enabled)
+                AutoQuestController.settings.autoAccept = enabled and true or false
+        end
+
+        function AutoQuestController.setAutoTurnIn(enabled)
+                AutoQuestController.settings.autoTurnIn = enabled and true or false
+        end
+
+        function AutoQuestController.getTargetModel()
+                return AutoQuestController.currentTarget
+        end
+
+        function AutoQuestController.getStatusText()
+                return AutoQuestController.status.state
+        end
+
+        function AutoQuestController.getQuestText()
+                return AutoQuestController.status.quest
+        end
+
+        function AutoQuestController.getTargetText()
+                return AutoQuestController.status.target
+        end
+
+        function AutoQuestController.getProgressText()
+                return AutoQuestController.status.progress
+        end
+
+        function AutoQuestController.getTargetHealthPct()
+                return AutoQuestController.status.healthPct or 0
+        end
+end
+
+local AutoDemonController = {}
+do
+        AutoDemonController.STATUS_STATES = {
+                "Disabled",
+                "Detecting Spider Lilies",
+                "Collecting Spider Lily",
+                "No Spider Lilies Found",
+        }
+        AutoDemonController.settings = {
+                enabled = false,
+                autoCollect = true,
+        }
+        AutoDemonController.status = {
+                state = "Disabled",
+                currentLily = "None",
+                detection = "Idle",
+                collected = 0,
+        }
+        AutoDemonController.currentTarget = nil
+
+        local function validState(state)
+                for _, known in ipairs(AutoDemonController.STATUS_STATES) do
+                        if known == state then
+                                return true
+                        end
+                end
+                return false
+        end
+
+        function AutoDemonController.setState(state)
+                if validState(state) then
+                        AutoDemonController.status.state = state
+                end
+                return AutoDemonController.status.state
+        end
+
+        local function autoDemonLoop()
+                local announced = false
+                while Tracker.isRunning("autodemon") do
+                        task.wait(1)
+                        if not announced then
+                                announced = true
+                                Logger.info("auto demon placeholder running - spider lily logic arrives with the game instance file")
+                        end
+                        if SpiderLilyDetector.hasSpiderLilyData() then
+                                AutoDemonController.status.detection = "Detecting"
+                                AutoDemonController.setState("Detecting Spider Lilies")
+                        else
+                                AutoDemonController.status.detection = "No data"
+                                AutoDemonController.setState("No Spider Lilies Found")
+                        end
+                end
+        end
+
+        function AutoDemonController.setEnabled(enabled)
+                local want = enabled and true or false
+                if AutoDemonController.settings.enabled == want then
+                        return want
+                end
+                if enabled then
+                        if not GameDetector.requireGame("Auto Demon") then
+                                return false
+                        end
+                        if not SpiderLilyDetector.hasSpiderLilyData() then
+                                Util.notify("Auto Demon", "No Spider Lily data in game profile yet")
+                                return false
+                        end
+                        AutoDemonController.settings.enabled = true
+                        AutoDemonController.status.detection = "Detecting"
+                        AutoDemonController.setState("Detecting Spider Lilies")
+                        Tracker.setRunning("autodemon", true)
+                        task.spawn(autoDemonLoop)
+                        return true
+                end
+                AutoDemonController.settings.enabled = false
+                Tracker.setRunning("autodemon", false)
+                AutoDemonController.setState("Disabled")
+                AutoDemonController.status.currentLily = "None"
+                AutoDemonController.status.detection = "Idle"
+                AutoDemonController.currentTarget = nil
+                return true
+        end
+
+        function AutoDemonController.setAutoCollect(enabled)
+                AutoDemonController.settings.autoCollect = enabled and true or false
+        end
+
+        function AutoDemonController.getTargetModel()
+                return AutoDemonController.currentTarget
+        end
+
+        function AutoDemonController.getStatusText()
+                return AutoDemonController.status.state
+        end
+
+        function AutoDemonController.getLilyText()
+                return AutoDemonController.status.currentLily
+        end
+
+        function AutoDemonController.getDetectionText()
+                return AutoDemonController.status.detection
+        end
+
+        function AutoDemonController.getCollected()
+                return AutoDemonController.status.collected
+        end
+end
+
+local AutoBossController = {}
+do
+        AutoBossController.STATUS_STATES = {
+                "Disabled",
+                "Detecting Boss",
+                "Boss Found",
+                "Attacking Boss",
+                "No Boss Found",
+        }
+        AutoBossController.settings = {
+                enabled = false,
+                selectedBoss = "",
+                autoAttack = false,
+                detection = false,
+        }
+        AutoBossController.status = {
+                state = "Disabled",
+                currentBoss = "None",
+                healthPct = 0,
+        }
+        AutoBossController.currentTarget = nil
+
+        local function validState(state)
+                for _, known in ipairs(AutoBossController.STATUS_STATES) do
+                        if known == state then
+                                return true
+                        end
+                end
+                return false
+        end
+
+        function AutoBossController.setState(state)
+                if validState(state) then
+                        AutoBossController.status.state = state
+                end
+                return AutoBossController.status.state
+        end
+
+        function AutoBossController.resetStatus()
+                AutoBossController.status.state = "Disabled"
+                AutoBossController.status.currentBoss = "None"
+                AutoBossController.status.healthPct = 0
+                AutoBossController.currentTarget = nil
+        end
+
+        local function autoBossLoop()
+                local announced = false
+                while Tracker.isRunning("autoboss") do
+                        task.wait(1)
+                        if not announced then
+                                announced = true
+                                Logger.info("auto boss placeholder running - boss logic arrives with the game instance file")
+                        end
+                        if AutoBossController.settings.selectedBoss ~= "" or BossDetector.hasBossData() then
+                                AutoBossController.setState("Detecting Boss")
+                        else
+                                AutoBossController.setState("No Boss Found")
+                        end
+                end
+        end
+
+        function AutoBossController.setEnabled(enabled)
+                local want = enabled and true or false
+                if AutoBossController.settings.enabled == want then
+                        return want
+                end
+                if enabled then
+                        if not GameDetector.requireGame("Auto Boss") then
+                                return false
+                        end
+                        if AutoBossController.settings.selectedBoss == "" and not BossDetector.hasBossData() then
+                                Util.notify("Auto Boss", "No boss selected and no boss data in game profile yet")
+                                return false
+                        end
+                        AutoBossController.settings.enabled = true
+                        AutoBossController.setState("Detecting Boss")
+                        Tracker.setRunning("autoboss", true)
+                        task.spawn(autoBossLoop)
+                        return true
+                end
+                AutoBossController.settings.enabled = false
+                Tracker.setRunning("autoboss", false)
+                AutoBossController.resetStatus()
+                return true
+        end
+
+        function AutoBossController.setBoss(name)
+                AutoBossController.settings.selectedBoss = name or ""
+        end
+
+        function AutoBossController.setAutoAttack(enabled)
+                AutoBossController.settings.autoAttack = enabled and true or false
+        end
+
+        function AutoBossController.setDetection(enabled)
+                AutoBossController.settings.detection = enabled and true or false
+        end
+
+        function AutoBossController.getBossOptions()
+                return BossDetector.getBossOptions()
+        end
+
+        function AutoBossController.getTargetModel()
+                return AutoBossController.currentTarget
+        end
+
+        function AutoBossController.getStatusText()
+                return AutoBossController.status.state
+        end
+
+        function AutoBossController.getBossText()
+                return AutoBossController.status.currentBoss
+        end
+
+        function AutoBossController.getHealthPct()
+                return AutoBossController.status.healthPct or 0
+        end
+end
+
+local KillAuraController = {}
+do
+        KillAuraController.settings = {
+                enabled = false,
+        }
+        KillAuraController.status = {
+                state = "Disabled",
+                targetName = "None",
+        }
+        KillAuraController.currentTarget = nil
+
+        function KillAuraController.setCurrentTarget(target)
+                KillAuraController.currentTarget = target
+                local name = "None"
+                if typeof(target) == "Instance" then
+                        name = target.Name
+                end
+                KillAuraController.status.targetName = name
+        end
+
+        function KillAuraController.getCurrentTarget()
+                return KillAuraController.currentTarget
+        end
+
+        local function resolveTarget()
+                local target = AutoQuestController.getTargetModel()
+                if target == nil then
+                        target = AutoBossController.getTargetModel()
+                end
+                return target
+        end
+
+        local function killAuraLoop()
+                while Tracker.isRunning("killaura") do
+                        task.wait(0.25)
+                        local target = resolveTarget()
+                        if target ~= nil then
+                                KillAuraController.setCurrentTarget(target)
+                                CombatHandler.attack(target)
+                        end
+                end
+        end
+
+        function KillAuraController.setEnabled(enabled)
+                local want = enabled and true or false
+                if KillAuraController.settings.enabled == want then
+                        return want
+                end
+                if enabled then
+                        if not GameDetector.requireGame("Kill Aura") then
+                                return false
+                        end
+                        KillAuraController.settings.enabled = true
+                        KillAuraController.status.state = "Armed"
+                        Tracker.setRunning("killaura", true)
+                        task.spawn(killAuraLoop)
+                        return true
+                end
+                KillAuraController.settings.enabled = false
+                Tracker.setRunning("killaura", false)
+                KillAuraController.status.state = "Disabled"
+                KillAuraController.currentTarget = nil
+                KillAuraController.status.targetName = "None"
+                return true
+        end
+
+        function KillAuraController.getStatusText()
+                if KillAuraController.settings.enabled then
+                        return KillAuraController.status.state .. " - " .. KillAuraController.status.targetName
+                end
+                return "Disabled"
         end
 end
 
@@ -3095,7 +3323,10 @@ do
 
                 function SettingsController.emergencyStop()
                                 local ok = pcall(function()
-                                                FarmController.setEnabled(false)
+                                                AutoQuestController.setEnabled(false)
+                                                AutoDemonController.setEnabled(false)
+                                                AutoBossController.setEnabled(false)
+                                                KillAuraController.setEnabled(false)
                                                 ClanController.setEnabled(false)
                                                 MovementController.setFly(false)
                                                 MovementController.setNoclip(false)
@@ -3199,11 +3430,12 @@ SettingsController.startFpsCounter()
 
 local HomeTab = Window:CreateTab({ name = "Home" })
 local UniversalTab = Window:CreateTab({ name = "Universal" })
-local FarmTab = Window:CreateTab({ name = "Auto Farm" })
+local MainTab = Window:CreateTab({ name = "Main" })
 local ClanTab = Window:CreateTab({ name = "Clan" })
 local EspTab = Window:CreateTab({ name = "ESP" })
 local ServerTab = Window:CreateTab({ name = "Server" })
 local SettingsTab = Window:CreateTab({ name = "Settings" })
+local UiSettingsTab = Window:CreateTab({ name = "UI Settings" })
 
 local Elements = {}
 
@@ -3276,7 +3508,7 @@ local function syncAllOff()
         local keys = {
                 "flyToggle", "noclipToggle", "infjumpToggle", "sprintToggle", "lockstatsToggle",
                 "clicktpToggle", "godToggle", "antiafkToggle", "followToggle", "autoequipToggle",
-                "farmToggle", "autoQuestToggle", "clanToggle", "espPlayersToggle", "espNpcsToggle",
+                "autoQuestToggle", "autoDemonToggle", "autoBossToggle", "killAuraToggle", "clanToggle", "espPlayersToggle", "espNpcsToggle",
                 "espBossesToggle", "espQuestToggle", "espItemsToggle", "fullbrightToggle",
         }
         for _, key in ipairs(keys) do
@@ -3327,8 +3559,9 @@ do
         local function countActive()
                 local activeModules = 0
                 local names = {
-                        "farm", "clan", "fly", "noclip", "infjump", "god", "antiafk", "sprint",
-                        "npcscan", "espplayers", "lockstats", "follow", "clicktp", "autoperf",
+                        "autoquest", "autodemon", "autoboss", "killaura", "clan", "fly", "noclip",
+                        "infjump", "god", "antiafk", "sprint", "npcscan", "espplayers", "lockstats",
+                        "follow", "clicktp", "autoperf",
                 }
                 for _, name in ipairs(names) do
                         if Tracker.isRunning(name) then
@@ -3349,11 +3582,15 @@ do
                                 gameName = GameDetector.detect().gameName or "?"
                         end)
                         local taskLine = "Idle - automation off"
-                        if Tracker.isRunning("farm") then
-                                taskLine = "Auto Farm: " .. FarmController.settings.mode
-                                if FarmController.lastTargetName ~= "" then
-                                        taskLine = taskLine .. " - " .. FarmController.lastTargetName
+                        if Tracker.isRunning("autoquest") then
+                                taskLine = "Auto Quest: " .. AutoQuestController.getStatusText()
+                                if AutoQuestController.getQuestText() ~= "None" then
+                                        taskLine = taskLine .. " - " .. AutoQuestController.getQuestText()
                                 end
+                        elseif Tracker.isRunning("autodemon") then
+                                taskLine = "Auto Demon: " .. AutoDemonController.getStatusText()
+                        elseif Tracker.isRunning("autoboss") then
+                                taskLine = "Auto Boss: " .. AutoBossController.getBossText()
                         elseif Tracker.isRunning("clan") then
                                 taskLine = "Clan reroll active - " .. tostring(ClanController.sessionRerolls) .. " reroll(s)"
                         end
@@ -3367,7 +3604,11 @@ do
                                 Elements.statModules:Set(countActive())
                                 Elements.statUptime:Set(math.floor(os.clock() - bootTime))
                                 Elements.homeTask:Set(taskLine)
-                                Elements.homeProgress:Set(math.floor(FarmController.lastTargetHealthPct or 0))
+                                local targetHealth = AutoBossController.getHealthPct()
+                                if targetHealth <= 0 then
+                                        targetHealth = AutoQuestController.getTargetHealthPct()
+                                end
+                                Elements.homeProgress:Set(math.floor(targetHealth))
                         end)
                 end
         end)
@@ -3375,7 +3616,7 @@ do
         HomeTab:CreateSection({ name = "Game Support" })
         HomeTab:CreateText({
                 name = "Project Slayers 2",
-                text = "Game-specific features (Auto Farm, Clan Reroll, quest automation) stay locked until the game releases and the instance data is added. Universal features work in every game.",
+                text = "Game-specific features (Auto Quest, Auto Demon, Auto Boss, Kill Aura, Clan Reroll) stay locked until the game releases and the instance data is added. Universal features work in every game.",
         })
         HomeTab:CreateButton({
                 name = "Check for Updates",
@@ -3745,51 +3986,257 @@ do
 end
 
 do
-        FarmTab:CreateSection({ name = "Automation" })
-        FarmTab:CreateText({
+        MainTab:CreateSection({ name = "Auto Quest" })
+        MainTab:CreateText({
                 name = "Locked",
-                text = "Auto Farm needs Project Slayers 2 instance data (mob models, quest remotes). It unlocks automatically once the game profile is loaded after release.",
+                text = "Auto Quest, Auto Demon and Auto Boss need Project Slayers 2 instance data (quests, NPCs, bosses, Spider Lilies, remotes). They unlock automatically once the game profile is loaded after release.",
         })
-        local farmToggle
-        farmToggle = FarmTab:CreateToggle({
-                name = "Enable Auto Farm",
-                description = "Target - move - attack - interact loop with recovery",
+        local autoQuestToggle
+        autoQuestToggle = MainTab:CreateToggle({
+                name = "Auto Quest",
+                description = "Finds the right quest for your level, completes it, then continues to the next one",
                 value = false,
-                flag = "FarmEnable",
+                flag = "QuestEnable",
                 callback = function(value)
-                        local ok = FarmController.setEnabled(value)
+                        local ok = AutoQuestController.setEnabled(value)
                         if value and not ok then
-                                safeSet(farmToggle, false)
+                                safeSet(autoQuestToggle, false)
                         end
                 end,
         })
-        Elements.farmToggle = farmToggle
-        lockUntilRelease(farmToggle)
-        if farmToggle.value and not GameDetector.isGameReady() then
-                safeSet(farmToggle, false)
+        Elements.autoQuestToggle = autoQuestToggle
+        lockUntilRelease(autoQuestToggle)
+        if autoQuestToggle.value and not GameDetector.isGameReady() then
+                safeSet(autoQuestToggle, false)
         end
-        FarmTab:CreateDropdown({
-                name = "Farm Mode",
-                options = { "Nearest", "Selected", "Lowest HP", "Boss", "Smart" },
-                value = "Nearest",
-                description = "Smart weighs distance and remaining health",
-                flag = "FarmMode",
+        local questDropdown
+        questDropdown = MainTab:CreateDropdown({
+                name = "Quest Selection",
+                options = { "Auto Detect" },
+                value = "Auto Detect",
+                placeholder = "Auto Detect",
+                description = "Populated from the game profile once the instance file is loaded",
+                forgetState = true,
                 callback = function(option)
-                        FarmController.setMode(normalizeChoice(option))
+                        AutoQuestController.setQuest(normalizeChoice(option))
+                end,
+        })
+        local questDetectToggle
+        questDetectToggle = MainTab:CreateToggle({
+                name = "Auto Detect Quest",
+                description = "Picks the quest that fits your current level",
+                value = true,
+                flag = "QuestAutoDetect",
+                callback = function(value)
+                        AutoQuestController.setAutoDetect(value)
+                end,
+        })
+        Elements.questDetectToggle = questDetectToggle
+        local questRow = MainTab:CreateGroup()
+        local autoAcceptToggle
+        autoAcceptToggle = questRow:CreateToggle({
+                name = "Auto Accept",
+                value = true,
+                flag = "QuestAutoAccept",
+                callback = function(value)
+                        AutoQuestController.setAutoAccept(value)
+                end,
+        })
+        Elements.autoAcceptToggle = autoAcceptToggle
+        local autoTurnInToggle
+        autoTurnInToggle = questRow:CreateToggle({
+                name = "Auto Turn-In",
+                value = true,
+                flag = "QuestAutoTurnIn",
+                callback = function(value)
+                        AutoQuestController.setAutoTurnIn(value)
+                end,
+        })
+        Elements.autoTurnInToggle = autoTurnInToggle
+        Elements.questName = MainTab:CreateText({
+                name = "Current Quest",
+                text = AutoQuestController.getQuestText(),
+        })
+        Elements.questTarget = MainTab:CreateText({
+                name = "Current Target",
+                text = AutoQuestController.getTargetText(),
+        })
+        Elements.questProgress = MainTab:CreateText({
+                name = "Quest Progress",
+                text = AutoQuestController.getProgressText(),
+        })
+        Elements.questStatus = MainTab:CreateText({
+                name = "Quest Status",
+                text = AutoQuestController.getStatusText(),
+        })
+        local questActionRow = MainTab:CreateGroup()
+        local refreshQuestsButton
+        refreshQuestsButton = questActionRow:CreateButton({
+                name = "Refresh Quests",
+                callback = function()
+                        if not GameDetector.requireGame("Quest Selection") then
+                                return
+                        end
+                        local options = { "Auto Detect" }
+                        for _, quest in ipairs(QuestDetector.getQuestOptions()) do
+                                table.insert(options, quest)
+                        end
+                        pcall(function()
+                                questDropdown:Refresh(options)
+                        end)
+                        Util.notify("Auto Quest", #options - 1 .. " quest(s) loaded")
+                end,
+        })
+        lockUntilRelease(refreshQuestsButton)
+        questActionRow:CreateButton({
+                name = "Detect Quest System",
+                description = "Scans quest givers and objective labels now, reports to the console",
+                callback = function()
+                        task.spawn(function()
+                                AutomationController.scanQuestSystem()
+                        end)
                 end,
         })
 
-        FarmTab:CreateSection({ name = "Targets" })
-        local targetDropdown = FarmTab:CreateDropdown({
+        MainTab:CreateSection({ name = "Auto Demon" })
+        local autoDemonToggle
+        autoDemonToggle = MainTab:CreateToggle({
+                name = "Auto Demon",
+                description = "Finds every Spider Lily and collects it",
+                value = false,
+                flag = "DemonEnable",
+                callback = function(value)
+                        local ok = AutoDemonController.setEnabled(value)
+                        if value and not ok then
+                                safeSet(autoDemonToggle, false)
+                        end
+                end,
+        })
+        Elements.autoDemonToggle = autoDemonToggle
+        lockUntilRelease(autoDemonToggle)
+        if autoDemonToggle.value and not GameDetector.isGameReady() then
+                safeSet(autoDemonToggle, false)
+        end
+        local collectToggle
+        collectToggle = MainTab:CreateToggle({
+                name = "Auto Collect Spider Lilies",
+                value = true,
+                flag = "DemonCollectLilies",
+                callback = function(value)
+                        AutoDemonController.setAutoCollect(value)
+                end,
+        })
+        Elements.collectToggle = collectToggle
+        Elements.demonStatus = MainTab:CreateText({
+                name = "Spider Lily Status",
+                text = AutoDemonController.getStatusText(),
+        })
+        Elements.demonLily = MainTab:CreateText({
+                name = "Current Spider Lily",
+                text = AutoDemonController.getLilyText(),
+        })
+        local demonStatRow = MainTab:CreateGroup()
+        Elements.statLilies = demonStatRow:CreateStat({ name = "Spider Lilies Collected", value = 0 })
+        Elements.demonDetection = MainTab:CreateText({
+                name = "Detection Status",
+                text = AutoDemonController.getDetectionText(),
+        })
+
+        MainTab:CreateSection({ name = "Auto Boss" })
+        local autoBossToggle
+        autoBossToggle = MainTab:CreateToggle({
+                name = "Auto Boss",
+                description = "Fights the selected boss automatically",
+                value = false,
+                flag = "BossEnable",
+                callback = function(value)
+                        local ok = AutoBossController.setEnabled(value)
+                        if value and not ok then
+                                safeSet(autoBossToggle, false)
+                        end
+                end,
+        })
+        Elements.autoBossToggle = autoBossToggle
+        lockUntilRelease(autoBossToggle)
+        if autoBossToggle.value and not GameDetector.isGameReady() then
+                safeSet(autoBossToggle, false)
+        end
+        local bossDropdown
+        bossDropdown = MainTab:CreateDropdown({
+                name = "Boss Selection",
+                options = {},
+                placeholder = "Select Boss",
+                description = "Populated with the bosses detected from the game once the instance file is loaded",
+                forgetState = true,
+                callback = function(option)
+                        AutoBossController.setBoss(normalizeChoice(option))
+                end,
+        })
+        local bossAttackToggle
+        bossAttackToggle = MainTab:CreateToggle({
+                name = "Auto Attack Boss",
+                value = false,
+                flag = "BossAutoAttack",
+                callback = function(value)
+                        AutoBossController.setAutoAttack(value)
+                end,
+        })
+        Elements.bossAttackToggle = bossAttackToggle
+        local bossDetectToggle
+        bossDetectToggle = MainTab:CreateToggle({
+                name = "Boss Detection",
+                value = false,
+                flag = "BossDetection",
+                callback = function(value)
+                        AutoBossController.setDetection(value)
+                end,
+        })
+        Elements.bossDetectToggle = bossDetectToggle
+        Elements.bossName = MainTab:CreateText({
+                name = "Current Boss",
+                text = AutoBossController.getBossText(),
+        })
+        Elements.bossStatus = MainTab:CreateText({
+                name = "Boss Status",
+                text = AutoBossController.getStatusText(),
+        })
+        Elements.bossHealth = tryCreate(MainTab, "CreateProgress", {
+                name = "Boss Health",
+                range = { 0, 100 },
+                value = 0,
+        })
+        local bossActionRow = MainTab:CreateGroup()
+        local refreshBossesButton
+        refreshBossesButton = bossActionRow:CreateButton({
+                name = "Refresh Bosses",
+                callback = function()
+                        if not GameDetector.requireGame("Boss Selection") then
+                                return
+                        end
+                        local options = AutoBossController.getBossOptions()
+                        if #options > 0 then
+                                pcall(function()
+                                        bossDropdown:Refresh(options)
+                                end)
+                                Util.notify("Auto Boss", #options .. " boss(es) loaded")
+                        else
+                                Util.notify("Auto Boss", "No boss data in game profile yet")
+                        end
+                end,
+        })
+        lockUntilRelease(refreshBossesButton)
+
+        MainTab:CreateSection({ name = "Targets" })
+        local targetDropdown = MainTab:CreateDropdown({
                 name = "Selected Target",
                 options = {},
                 placeholder = "None loaded",
                 forgetState = true,
                 callback = function(option)
-                        FarmController.setTarget(normalizeChoice(option))
+                        AutomationController.setTarget(normalizeChoice(option))
                 end,
         })
-        FarmTab:CreateDropdown({
+        MainTab:CreateDropdown({
                 name = "Exclude Targets",
                 options = {},
                 multiSelect = true,
@@ -3797,10 +4244,10 @@ do
                 description = "Excluded targets are never auto-acquired",
                 forgetState = true,
                 callback = function(selected)
-                        FarmController.setExclusions(normalizeMulti(selected))
+                        AutomationController.setExclusions(normalizeMulti(selected))
                 end,
         })
-        local targetRow = FarmTab:CreateGroup()
+        local targetRow = MainTab:CreateGroup()
         targetRow:CreateSlider({
                 name = "Max Range",
                 range = { 100, 10000 },
@@ -3809,13 +4256,13 @@ do
                 value = 2000,
                 flag = "FarmMaxRange",
                 callback = function(value)
-                        FarmController.setMaxRange(value)
+                        AutomationController.setMaxRange(value)
                 end,
         })
         local refreshTargetsButton = targetRow:CreateButton({
                 name = "Refresh",
                 callback = function()
-                        if not GameDetector.requireGame("Auto Farm") then
+                        if not GameDetector.requireGame("Automation") then
                                 return
                         end
                         local mobs = GameProfile.data.mobs
@@ -3824,24 +4271,24 @@ do
                                         targetDropdown:Refresh(mobs)
                                 end)
                         else
-                                Util.notify("Auto Farm", "No mob data in game profile yet")
+                                Util.notify("Automation", "No mob data in game profile yet")
                         end
                 end,
         })
         lockUntilRelease(refreshTargetsButton)
 
-        FarmTab:CreateSection({ name = "Movement" })
-        FarmTab:CreateDropdown({
+        MainTab:CreateSection({ name = "Movement" })
+        MainTab:CreateDropdown({
                 name = "Movement Method",
                 options = { "Auto", "Magnitize", "Teleport", "Tween", "Walk" },
                 value = "Auto",
                 description = "Auto escalates to teleport when stuck",
                 flag = "FarmMoveMethod",
                 callback = function(option)
-                        FarmController.setMoveMethod(normalizeChoice(option))
+                        AutomationController.setMoveMethod(normalizeChoice(option))
                 end,
         })
-        local moveRow = FarmTab:CreateGroup()
+        local moveRow = MainTab:CreateGroup()
         moveRow:CreateSlider({
                 name = "Movement Speed",
                 description = "Used by the Tween method",
@@ -3851,7 +4298,7 @@ do
                 value = 60,
                 flag = "FarmMoveSpeed",
                 callback = function(value)
-                        FarmController.setMoveSpeed(value)
+                        AutomationController.setMoveSpeed(value)
                 end,
         })
         moveRow:CreateSlider({
@@ -3862,22 +4309,22 @@ do
                 value = 4,
                 flag = "FarmDistance",
                 callback = function(value)
-                        FarmController.setDistance(value)
+                        AutomationController.setDistance(value)
                 end,
         })
 
-        FarmTab:CreateSection({ name = "Interaction" })
-        FarmTab:CreateDropdown({
+        MainTab:CreateSection({ name = "Interaction" })
+        MainTab:CreateDropdown({
                 name = "Interaction Mode",
                 options = { "Auto", "ProximityPrompt", "ClickDetector", "Off" },
                 value = "Auto",
                 description = "Auto tries prompts, then click detectors",
                 flag = "FarmInteractMode",
                 callback = function(option)
-                        FarmController.setInteractMode(normalizeChoice(option))
+                        AutomationController.setInteractMode(normalizeChoice(option))
                 end,
         })
-        local interRow = FarmTab:CreateGroup()
+        local interRow = MainTab:CreateGroup()
         interRow:CreateSlider({
                 name = "Interaction Delay",
                 range = { 0.1, 5 },
@@ -3886,7 +4333,7 @@ do
                 value = 0.5,
                 flag = "FarmInteractDelay",
                 callback = function(value)
-                        FarmController.setInteractDelay(value)
+                        AutomationController.setInteractDelay(value)
                 end,
         })
         interRow:CreateSlider({
@@ -3897,10 +4344,10 @@ do
                 value = 10,
                 flag = "FarmInteractRange",
                 callback = function(value)
-                        FarmController.setInteractRange(value)
+                        AutomationController.setInteractRange(value)
                 end,
         })
-        local attackRow = FarmTab:CreateGroup()
+        local attackRow = MainTab:CreateGroup()
         local autoAttackToggle
         autoAttackToggle = attackRow:CreateToggle({
                 name = "Auto Attack",
@@ -3908,7 +4355,7 @@ do
                 value = false,
                 flag = "FarmAutoAttack",
                 callback = function(value)
-                        FarmController.setAutoAttack(value)
+                        AutomationController.setAutoAttack(value)
                 end,
         })
         Elements.autoAttackToggle = autoAttackToggle
@@ -3920,69 +4367,12 @@ do
                 value = 0.35,
                 flag = "FarmAttackDelay",
                 callback = function(value)
-                        FarmController.setAttackDelay(value)
+                        AutomationController.setAttackDelay(value)
                 end,
         })
 
-        FarmTab:CreateSection({ name = "Quest" })
-        Elements.farmStatus = FarmTab:CreateText({
-                name = "Status",
-                text = FarmController.getStatusText(),
-        })
-        local autoQuestToggle
-        autoQuestToggle = FarmTab:CreateToggle({
-                name = "Auto Quest Loop",
-                description = "Accept - progress - turn in - repeat",
-                value = false,
-                flag = "FarmAutoQuest",
-                callback = function(value)
-                        local ok = FarmController.setAutoQuest(value)
-                        if value and not ok then
-                                safeSet(autoQuestToggle, false)
-                        end
-                end,
-        })
-        Elements.autoQuestToggle = autoQuestToggle
-        lockUntilRelease(autoQuestToggle)
-        if autoQuestToggle.value and not GameDetector.isGameReady() then
-                safeSet(autoQuestToggle, false)
-        end
-        local questRow = FarmTab:CreateGroup()
-        local autoAcceptToggle
-        autoAcceptToggle = questRow:CreateToggle({
-                name = "Auto Accept",
-                value = true,
-                flag = "QuestAutoAccept",
-                callback = function(value)
-                        FarmController.setAutoAccept(value)
-                end,
-        })
-        Elements.autoAcceptToggle = autoAcceptToggle
-        local autoTurnInToggle
-        autoTurnInToggle = questRow:CreateToggle({
-                name = "Auto Turn-In",
-                value = true,
-                flag = "QuestAutoTurnIn",
-                callback = function(value)
-                        FarmController.setAutoTurnIn(value)
-                end,
-        })
-        Elements.autoTurnInToggle = autoTurnInToggle
-        FarmTab:CreateButton({
-                name = "Detect Quest System",
-                description = "Scans quest givers and objective labels now, reports to the console",
-                callback = function()
-                        task.spawn(function()
-                                FarmController.scanQuestSystem()
-                                pcall(function()
-                                        Elements.farmStatus:Set(FarmController.getStatusText())
-                                end)
-                        end)
-                end,
-        })
-
-        FarmTab:CreateSection({ name = "Advanced" })
-        local advancedRow = FarmTab:CreateGroup()
+        MainTab:CreateSection({ name = "Advanced" })
+        local advancedRow = MainTab:CreateGroup()
         advancedRow:CreateSlider({
                 name = "Target Scan Interval",
                 range = { 0.5, 10 },
@@ -3991,7 +4381,7 @@ do
                 value = 2,
                 flag = "FarmScanInterval",
                 callback = function(value)
-                        FarmController.setScanInterval(value)
+                        AutomationController.setScanInterval(value)
                 end,
         })
         advancedRow:CreateSlider({
@@ -4002,24 +4392,64 @@ do
                 value = 0.25,
                 flag = "FarmTickInterval",
                 callback = function(value)
-                        FarmController.setTickInterval(value)
+                        AutomationController.setTickInterval(value)
                 end,
         })
-        FarmTab:CreateText({
+        MainTab:CreateText({
                 name = "Recovery",
-                text = "Built-in: death pauses and resumes on respawn, stuck movement escalates to teleport, vanished targets are re-acquired on the next scan.",
+                text = "Recovery behaviors (respawn resume, stuck movement escalation, target re-acquisition) return together with the quest and boss engines once the game instance file is loaded.",
         })
 
-        Tracker.setRunning("farmstatus", true)
+        GameProfile.onLoad(function()
+                pcall(function()
+                        local options = { "Auto Detect" }
+                        for _, quest in ipairs(QuestDetector.getQuestOptions()) do
+                                table.insert(options, quest)
+                        end
+                        questDropdown:Refresh(options)
+                end)
+                pcall(function()
+                        bossDropdown:Refresh(AutoBossController.getBossOptions())
+                end)
+        end)
+
+        Tracker.setRunning("automationstatus", true)
         task.spawn(function()
-                local lastLine = nil
-                while Tracker.isRunning("farmstatus") do
-                        task.wait(2)
-                        local line = FarmController.getStatusText()
-                        if line ~= lastLine then
-                                lastLine = line
+                local lastValues = {}
+                local function syncText(key, value)
+                        if lastValues[key] ~= value and Elements[key] then
+                                lastValues[key] = value
                                 pcall(function()
-                                        Elements.farmStatus:Set(line)
+                                        Elements[key]:Set(value)
+                                end)
+                        end
+                end
+                local lastLilies = -1
+                local lastBossHealth = -1
+                while Tracker.isRunning("automationstatus") do
+                        task.wait(2)
+                        syncText("questName", AutoQuestController.getQuestText())
+                        syncText("questTarget", AutoQuestController.getTargetText())
+                        syncText("questProgress", AutoQuestController.getProgressText())
+                        syncText("questStatus", AutoQuestController.getStatusText())
+                        syncText("demonStatus", AutoDemonController.getStatusText())
+                        syncText("demonLily", AutoDemonController.getLilyText())
+                        syncText("demonDetection", AutoDemonController.getDetectionText())
+                        syncText("bossName", AutoBossController.getBossText())
+                        syncText("bossStatus", AutoBossController.getStatusText())
+                        syncText("killAuraStatus", KillAuraController.getStatusText())
+                        local lilies = AutoDemonController.getCollected()
+                        if lilies ~= lastLilies then
+                                lastLilies = lilies
+                                pcall(function()
+                                        Elements.statLilies:Set(lilies)
+                                end)
+                        end
+                        local bossHealth = math.floor(AutoBossController.getHealthPct())
+                        if bossHealth ~= lastBossHealth then
+                                lastBossHealth = bossHealth
+                                pcall(function()
+                                        Elements.bossHealth:Set(bossHealth)
                                 end)
                         end
                 end
@@ -4459,158 +4889,52 @@ do
 end
 
 do
-        SettingsTab:CreateSection({ name = "Configuration" })
-        local configDropdown
-        local configName
-        configDropdown = SettingsTab:CreateDropdown({
-                name = "Saved Configs",
-                options = {},
-                placeholder = "None saved yet",
-                description = "Selecting pre-fills the name field below",
-                forgetState = true,
-                callback = function(option)
-                        local name = normalizeChoice(option)
-                        if name ~= "" and configName then
-                                safeSet(configName, name)
-                        end
-                end,
-        })
-        configName = tryCreate(SettingsTab, "CreateInput", {
-                name = "Config Name",
-                placeholder = "e.g. Farming",
-                flag = "ConfigName",
-                callback = function(text)
-                        Logger.debug("config name set: " .. tostring(text))
-                end,
-        })
-        local function refreshConfigs()
-                pcall(function()
-                        local list = Window:ListConfigs() or {}
-                        configDropdown:Refresh(list)
-                end)
-        end
-        refreshConfigs()
-        local manageRow = SettingsTab:CreateGroup()
-        manageRow:CreateButton({
-                name = "Save",
-                description = "Snapshot current state",
-                callback = function()
-                        local name = Util.trim(configName and configName.value or "")
-                        local ok = false
-                        pcall(function()
-                                if name ~= "" then
-                                        ok = Window:Save(name)
-                                else
-                                        ok = Window:Save()
-                                end
-                        end)
-                        Util.notify("Configs", ok and ("Saved " .. (name ~= "" and name or "default")) or "Save failed")
-                        refreshConfigs()
-                end,
-        })
-        manageRow:CreateButton({
-                name = "Load",
-                description = "Applies through every element",
-                callback = function()
-                        local name = Util.trim(configName and configName.value or "")
-                        local ok = false
-                        pcall(function()
-                                if name ~= "" then
-                                        ok = Window:Load(name)
-                                else
-                                        ok = Window:Load()
-                                end
-                        end)
-                        Util.notify("Configs", ok and ("Loaded " .. (name ~= "" and name or "default")) or "Load failed - check the name")
-                end,
-        })
-        manageRow:CreateButton({
-                name = "Delete",
-                callback = function()
-                        local name = Util.trim(configName and configName.value or "")
-                        if name == "" then
-                                Util.notify("Configs", "Enter a config name to delete")
-                                return
-                        end
-                        local ok = false
-                        pcall(function()
-                                ok = Window:DeleteConfig(name)
-                        end)
-                        Util.notify("Configs", ok and ("Deleted " .. name) or "Delete failed - check the name")
-                        refreshConfigs()
-                end,
-        })
-        local configRow = SettingsTab:CreateGroup()
-        configRow:CreateButton({
-                name = "Refresh List",
-                callback = function()
-                        refreshConfigs()
-                end,
-        })
-        configRow:CreateButton({
-                name = "Reset Saved Config",
-                callback = function()
-                        SettingsController.resetConfig()
-                end,
-        })
-
-        local notifyRow = SettingsTab:CreateGroup()
-        local notificationsToggle
-        notificationsToggle = notifyRow:CreateToggle({
-                name = "Notifications",
-                description = "Cards for meaningful events",
-                value = true,
-                flag = "SetNotifications",
-                callback = function(value)
-                        SettingsController.setNotifications(value)
-                end,
-        })
-        Elements.notificationsToggle = notificationsToggle
-        local autoReexecToggle
-        autoReexecToggle = notifyRow:CreateToggle({
-                name = "Auto Re-execute on Teleport",
-                value = true,
-                flag = "SetAutoReexecute",
-                callback = function(value)
-                        SettingsController.setAutoReexecute(value)
-                end,
-        })
-        Elements.autoReexecToggle = autoReexecToggle
-        SettingsTab:CreateSlider({
-                name = "Notification Duration",
-                range = { 1, 15 },
-                increment = 1,
-                suffix = " s",
-                value = 3,
-                flag = "SetNotifDuration",
-                callback = function(value)
-                        SettingsController.setNotifDuration(value)
-                end,
-        })
-
-        SettingsTab:CreateSection({ name = "Interface" })
-        local THEMES = { "default", "cobalt", "ember", "amethyst", "frost", "rose" }
+        SettingsTab:CreateSection({ name = "Auto Quest Settings" })
         SettingsTab:CreateDropdown({
-                name = "Theme",
-                options = THEMES,
-                value = "ember",
-                flag = "UITheme",
-                callback = function(theme)
-                        pcall(function()
-                                Window:ChangeTheme(normalizeChoice(theme))
-                        end)
+                name = "Quest Combat Method",
+                options = { "Melee", "Sword" },
+                value = "Melee",
+                description = "How Auto Quest fights quest mobs - wired up with the game instance file",
+                flag = "SetQuestCombat",
+                callback = function(option)
+                        CombatHandler.setQuestMethod(normalizeChoice(option))
                 end,
         })
-        SettingsTab:CreateKeybind({
-                name = "UI Toggle",
-                description = "Show / hide the window",
-                value = Enum.KeyCode.RightControl,
-                flag = "UIToggleKey",
-                callback = function()
-                        pcall(function()
-                                Window:ToggleHide()
-                        end)
+
+        SettingsTab:CreateSection({ name = "Auto Boss Settings" })
+        SettingsTab:CreateDropdown({
+                name = "Boss Combat Method",
+                options = { "Melee", "Sword" },
+                value = "Melee",
+                description = "How Auto Boss fights bosses - wired up with the game instance file",
+                flag = "SetBossCombat",
+                callback = function(option)
+                        CombatHandler.setBossMethod(normalizeChoice(option))
                 end,
+        })
+
+        SettingsTab:CreateSection({ name = "Kill Aura" })
+        local killAuraToggle
+        killAuraToggle = SettingsTab:CreateToggle({
+                name = "Kill Aura",
+                description = "Automatically attacks the current Auto Quest target or the selected boss",
+                value = false,
+                flag = "SetKillAura",
+                callback = function(value)
+                        local ok = KillAuraController.setEnabled(value)
+                        if value and not ok then
+                                safeSet(killAuraToggle, false)
+                        end
+                end,
+        })
+        Elements.killAuraToggle = killAuraToggle
+        lockUntilRelease(killAuraToggle)
+        if killAuraToggle.value and not GameDetector.isGameReady() then
+                safeSet(killAuraToggle, false)
+        end
+        Elements.killAuraStatus = SettingsTab:CreateText({
+                name = "Kill Aura Status",
+                text = KillAuraController.getStatusText(),
         })
 
         SettingsTab:CreateSection({ name = "Performance" })
@@ -4734,6 +5058,16 @@ do
                 name = "PS2 Hub " .. VERSION,
                 text = "Made by Faludaddd. Source: " .. REPO_URL,
         })
+        local autoReexecToggle
+        autoReexecToggle = SettingsTab:CreateToggle({
+                name = "Auto Re-execute on Teleport",
+                value = true,
+                flag = "SetAutoReexecute",
+                callback = function(value)
+                        SettingsController.setAutoReexecute(value)
+                end,
+        })
+        Elements.autoReexecToggle = autoReexecToggle
         SettingsTab:CreateKeybind({
                 name = "Emergency Stop Key",
                 description = "Global panic key - kills every active feature instantly",
@@ -4791,6 +5125,152 @@ do
                 name = "Copy Execute URL",
                 callback = function()
                         SettingsController.copySource()
+                end,
+        })
+end
+
+do
+        UiSettingsTab:CreateSection({ name = "Configuration" })
+        local configDropdown
+        local configName
+        configDropdown = UiSettingsTab:CreateDropdown({
+                name = "Saved Configs",
+                options = {},
+                placeholder = "None saved yet",
+                description = "Selecting pre-fills the name field below",
+                forgetState = true,
+                callback = function(option)
+                        local name = normalizeChoice(option)
+                        if name ~= "" and configName then
+                                safeSet(configName, name)
+                        end
+                end,
+        })
+        configName = tryCreate(UiSettingsTab, "CreateInput", {
+                name = "Config Name",
+                placeholder = "e.g. Questing",
+                flag = "ConfigName",
+                callback = function(text)
+                        Logger.debug("config name set: " .. tostring(text))
+                end,
+        })
+        local function refreshConfigs()
+                pcall(function()
+                        local list = Window:ListConfigs() or {}
+                        configDropdown:Refresh(list)
+                end)
+        end
+        refreshConfigs()
+        local manageRow = UiSettingsTab:CreateGroup()
+        manageRow:CreateButton({
+                name = "Save",
+                description = "Snapshot current state",
+                callback = function()
+                        local name = Util.trim(configName and configName.value or "")
+                        local ok = false
+                        pcall(function()
+                                if name ~= "" then
+                                        ok = Window:Save(name)
+                                else
+                                        ok = Window:Save()
+                                end
+                        end)
+                        Util.notify("Configs", ok and ("Saved " .. (name ~= "" and name or "default")) or "Save failed")
+                        refreshConfigs()
+                end,
+        })
+        manageRow:CreateButton({
+                name = "Load",
+                description = "Applies through every element",
+                callback = function()
+                        local name = Util.trim(configName and configName.value or "")
+                        local ok = false
+                        pcall(function()
+                                if name ~= "" then
+                                        ok = Window:Load(name)
+                                else
+                                        ok = Window:Load()
+                                end
+                        end)
+                        Util.notify("Configs", ok and ("Loaded " .. (name ~= "" and name or "default")) or "Load failed - check the name")
+                end,
+        })
+        manageRow:CreateButton({
+                name = "Delete",
+                callback = function()
+                        local name = Util.trim(configName and configName.value or "")
+                        if name == "" then
+                                Util.notify("Configs", "Enter a config name to delete")
+                                return
+                        end
+                        local ok = false
+                        pcall(function()
+                                ok = Window:DeleteConfig(name)
+                        end)
+                        Util.notify("Configs", ok and ("Deleted " .. name) or "Delete failed - check the name")
+                        refreshConfigs()
+                end,
+        })
+        local configRow = UiSettingsTab:CreateGroup()
+        configRow:CreateButton({
+                name = "Refresh List",
+                callback = function()
+                        refreshConfigs()
+                end,
+        })
+        configRow:CreateButton({
+                name = "Reset Saved Config",
+                callback = function()
+                        SettingsController.resetConfig()
+                end,
+        })
+
+        UiSettingsTab:CreateSection({ name = "Notifications" })
+        local notificationsToggle
+        notificationsToggle = UiSettingsTab:CreateToggle({
+                name = "Notifications",
+                description = "Cards for meaningful events",
+                value = true,
+                flag = "SetNotifications",
+                callback = function(value)
+                        SettingsController.setNotifications(value)
+                end,
+        })
+        Elements.notificationsToggle = notificationsToggle
+        UiSettingsTab:CreateSlider({
+                name = "Notification Duration",
+                range = { 1, 15 },
+                increment = 1,
+                suffix = " s",
+                value = 3,
+                flag = "SetNotifDuration",
+                callback = function(value)
+                        SettingsController.setNotifDuration(value)
+                end,
+        })
+
+        UiSettingsTab:CreateSection({ name = "Appearance" })
+        local THEMES = { "default", "cobalt", "ember", "amethyst", "frost", "rose" }
+        UiSettingsTab:CreateDropdown({
+                name = "Theme",
+                options = THEMES,
+                value = "ember",
+                flag = "UITheme",
+                callback = function(theme)
+                        pcall(function()
+                                Window:ChangeTheme(normalizeChoice(theme))
+                        end)
+                end,
+        })
+        UiSettingsTab:CreateKeybind({
+                name = "UI Toggle",
+                description = "Show / hide the window",
+                value = Enum.KeyCode.RightControl,
+                flag = "UIToggleKey",
+                callback = function()
+                        pcall(function()
+                                Window:ToggleHide()
+                        end)
                 end,
         })
 end
