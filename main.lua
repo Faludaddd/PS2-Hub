@@ -1,4 +1,4 @@
-local VERSION = "2.7.0"
+local VERSION = "2.7.1"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
@@ -87,6 +87,7 @@ do
         end
 end
 
+-- Central registry for connections, instances and loops; emergency stop, reload and re-execute clean up through it
 local Tracker = {}
 do
         local connections = {}
@@ -283,6 +284,7 @@ do
                 return humanoid and humanoid.Health > 0
         end
 
+        -- Executor-agnostic HTTP request; syn, fluxus and http_request executors name it differently
         function Util.request(opts)
                 local req = (syn and syn.request) or (http and http.request) or http_request or (fluxus and fluxus.request) or (request)
                 if not req then
@@ -396,6 +398,7 @@ do
                 GameProfile.status = "PENDING_RELEASE"
                 GameProfile.lockReason = "Project Slayers 2 is not released yet. Game-specific features stay locked until the instance data is provided."
 
+                -- Empty until the game instance file arrives; filling it unlocks every game-specific feature
                 GameProfile.data = {
                                 npcs = {},
                                 teleportPoints = {},
@@ -429,6 +432,7 @@ do
                                 GameProfile.status = "ACTIVE"
                                 GameProfile.lockReason = ""
                                 Logger.info("GameProfile loaded: " .. tostring(profileData.name or "unnamed"))
+                                -- onLoad handlers unlock locked UI elements and refresh the quest/boss/clan/location lists
                                 for _, fn in ipairs(onLoadHandlers) do
                                         pcall(fn)
                                 end
@@ -503,6 +507,7 @@ do
                                 return info.supported
                 end
 
+                -- Single gate every game-specific feature calls before acting
                 function GameDetector.requireGame(featureName)
                                 if GameDetector.isGameReady() then
                                                 return true
@@ -659,6 +664,7 @@ do
 
                                 MovementController.lockStats = enabled and true or false
                                 if enabled then
+                                                -- Re-applied every frame because the game can overwrite speed and jump at any moment
                                                 local conn
                                                 conn = RunService.Heartbeat:Connect(function()
                                                                 local humanoid = Util.getHumanoid()
@@ -713,6 +719,7 @@ do
                 Tracker.setRunning("noclip", enabled)
 
                                 if enabled then
+                                                -- Stepped fires before physics, keeping collisions disabled each frame
                                                 local conn = RunService.Stepped:Connect(function()
                                                                 local char = LocalPlayer.Character
                                                                 if not char then return end
@@ -1205,6 +1212,7 @@ end
 
 local WebhookController = {}
 do
+        -- Two fully independent webhook systems; clan and boss each keep their own URL and settings
         local TEST_COOLDOWN = 3
 
         WebhookController.clan = {
@@ -1419,6 +1427,7 @@ do
                 return true
         end
 
+        -- Called by ClanController (both spin paths) when the result equals the Desired Clan
         function WebhookController.notifyClanObtained(clanName, spins)
                 if not WebhookController.clan.enabled or not WebhookController.clan.notifyDesired then
                         return false
@@ -1444,6 +1453,7 @@ do
                 return true
         end
 
+        -- Entry point for Auto Boss kill detection once instance data confirms kills and drops
         function WebhookController.notifyBossKilled(bossName, drops)
                 if not WebhookController.boss.enabled or not WebhookController.boss.notifyKills then
                         return false
@@ -1501,6 +1511,7 @@ do
 
         local targets = {}
         local espGui = nil
+        -- Drawing renderer is PC-only; boxes and tracers fall back to Highlight elsewhere
         local drawingAvailable = false
         local updateConn = nil
         local playerConns = {}
@@ -2384,6 +2395,7 @@ do
                 return nil
         end
 
+        -- firesignal -> getconnections -> Activate chain covers different executors
         local function triggerRerollButton()
                 local buttonPath = GameProfile.get("clans.rerollButton")
                 local button = GameProfile.resolvePath(buttonPath)
@@ -2437,6 +2449,7 @@ do
                 return false
         end
 
+        -- Spins run through the main menu (no reroll NPC in PS2); profile paths point into the menu UI
         function ClanController.doReroll()
                 if not GameDetector.requireGame("Auto Spin Clan") then
                         return nil
@@ -2583,6 +2596,7 @@ local DiscoveryController = {}
 do
         DiscoveryController.lastSummary = "No scan yet"
 
+        -- Logs nearby humanoid candidates to help fill GameProfile after release
         function DiscoveryController.dump()
                 local found = {}
                 local scanned = 0
@@ -2640,6 +2654,7 @@ end
 
 local AutomationController = {}
 do
+        -- Shared movement and interaction settings for the quest, demon and boss engines
         AutomationController.settings = {
                 target = "",
                 exclusions = {},
@@ -2725,6 +2740,7 @@ do
                 return "Automation ready - quest and boss engines arrive with the game instance file"
         end
 
+        -- Heuristic quest-giver scan (Dialog / ProximityPrompt) used to fill GameProfile.quests
         function AutomationController.scanQuestSystem()
                 local givers = {}
                 local scanned = 0
@@ -2794,6 +2810,7 @@ local QuestDetector = {}
 do
         QuestDetector.status = "Idle"
 
+        -- Game-specific quest detection will be connected after instance analysis
         function QuestDetector.getPlayerLevel()
                 return nil
         end
@@ -2861,6 +2878,7 @@ do
                 return list
         end
 
+        -- Game-specific boss detection will be connected after instance analysis
         function BossDetector.scan()
                 return {}
         end
@@ -2875,6 +2893,7 @@ do
                 return type(lilies) == "table" and next(lilies) ~= nil
         end
 
+        -- Game-specific Spider Lily detection will be connected after instance analysis
         function SpiderLilyDetector.scan()
                 return {}
         end
@@ -2908,6 +2927,7 @@ do
                 return CombatHandler.bossMethod
         end
 
+        -- Real attack logic (melee / sword skill) arrives with the game instance file
         function CombatHandler.attack(target)
                 if target == nil then
                         return false
@@ -3306,6 +3326,7 @@ do
                 return KillAuraController.currentTarget
         end
 
+        -- Provides the current Auto Quest target to Kill Aura, falling back to Auto Boss
         local function resolveTarget()
                 local target = AutoQuestController.getTargetModel()
                 if target == nil then
@@ -3411,6 +3432,7 @@ do
                 seenNames = {}
         end
 
+        -- Reads GameProfile.data.teleportPoints; real Workspace map scanning connects after instance analysis
         function LocationDetector.ScanLocations()
                 local found = {}
                 local points = GameProfile.data.teleportPoints
@@ -3746,6 +3768,7 @@ do
                                 Util.notify("Project", ok and "Execute URL copied" or "Clipboard not supported")
                 end
 
+                -- Removes the Gen 2 .rfld config plus the legacy Gen 1 Config.rbxl
                 function SettingsController.resetConfig()
                                 local ok = false
                                 if isfolder and delfile then
@@ -3808,6 +3831,7 @@ do
                                 State.set("notifDuration", math.clamp(value, 1, 15))
                 end
 
+                -- perfScale stretches the Home and ESP status loops when FPS drops
                 function SettingsController.setAutoPerformance(enabled)
                                 if enabled then
                                                 if Tracker.isRunning("autoperf") then
@@ -3836,6 +3860,7 @@ do
                                 end
                 end
 
+                -- New loop-backed features must be registered here or emergency stop will miss them
                 function SettingsController.emergencyStop()
                                 local ok = pcall(function()
                                                 AutoQuestController.setEnabled(false)
@@ -3963,6 +3988,7 @@ end)
 local ConfigTab = Window:CreateTab({ name = "Config" })
 local SettingsTab = Window:CreateTab({ name = "Settings" })
 
+-- Rayfield autoLoad restores saved values by re-firing callbacks, so controller toggles must stay idempotent
 local Elements = {}
 
 local function normalizeChoice(choice)
@@ -4002,6 +4028,7 @@ local function lockReasonText()
         return "Not in Project Slayers 2 - open the game to use this feature"
 end
 
+-- Game-specific elements lock natively and unlock automatically when GameProfile.load fires
 local function lockUntilRelease(element)
         if element == nil or GameDetector.isGameReady() then
                 return
@@ -4021,6 +4048,7 @@ GameProfile.onLoad(function()
         lockedElements = {}
 end)
 
+-- true = skip callback so UI refreshes never re-trigger controllers
 local function safeSet(element, value)
         if element == nil then
                 return
@@ -4936,6 +4964,7 @@ do
                 text = "Recovery behaviors (respawn resume, stuck movement escalation, target re-acquisition) return together with the quest and boss engines once the game instance file is loaded.",
         })
 
+        -- Game-data dropdowns populate the moment the profile loads
         GameProfile.onLoad(function()
                 pcall(function()
                         local options = { "Auto Detect" }
@@ -4949,6 +4978,7 @@ do
                 end)
         end)
 
+        -- One loop syncs every automation status card instead of per-element loops
         Tracker.setRunning("automationstatus", true)
         task.spawn(function()
                 local lastValues = {}
