@@ -1,4 +1,4 @@
-local VERSION = "2.6.0"
+local VERSION = "2.7.0"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
@@ -1203,6 +1203,281 @@ do
                 end
 end
 
+local WebhookController = {}
+do
+        local TEST_COOLDOWN = 3
+
+        WebhookController.clan = {
+                enabled = false,
+                url = "",
+                notifyDesired = true,
+                status = "Not configured",
+        }
+        WebhookController.boss = {
+                enabled = false,
+                url = "",
+                notifyKills = true,
+                status = "Not configured",
+        }
+
+        local clanTesting = false
+        local bossTesting = false
+        local clanLastTest = 0
+        local bossLastTest = 0
+        local clanFailAnnounced = false
+        local bossFailAnnounced = false
+
+        local function accountSpoiler()
+                return "||" .. LocalPlayer.Name .. "||"
+        end
+
+        local function validWebhookUrl(url)
+                local trimmed = Util.trim(url)
+                if trimmed == "" then
+                        return nil, "Webhook URL required"
+                end
+                local ok1 = trimmed:find("^https://[%w%.%-]*discord%.com/api/webhooks/")
+                local ok2 = trimmed:find("^https://[%w%.%-]*discordapp%.com/api/webhooks/")
+                if not (ok1 or ok2) then
+                        return nil, "Invalid Discord webhook URL"
+                end
+                return trimmed, nil
+        end
+
+        local function postWebhook(url, payload)
+                local body = Util.jsonEncode(payload)
+                if body == nil then
+                        return false
+                end
+                local resp = Util.request({
+                        Url = url,
+                        Method = "POST",
+                        Headers = { ["Content-Type"] = "application/json" },
+                        Body = body,
+                })
+                if resp == nil then
+                        return false
+                end
+                local code = tonumber(resp.StatusCode or resp.status_code or resp.code) or 0
+                if code >= 200 and code < 300 then
+                        return true
+                end
+                Logger.warn("webhook rejected (HTTP " .. tostring(code) .. ")")
+                return false
+        end
+
+        local function baseEmbed(title, color, description)
+                return {
+                        title = title,
+                        description = description,
+                        color = color,
+                        footer = { text = "PS2 Hub v" .. VERSION },
+                }
+        end
+
+        function WebhookController.buildClanTestPayload()
+                local embed = baseEmbed("Clan Webhook Test", 3447003, "This is a test notification - no real clan was obtained.")
+                embed.fields = {
+                        { name = "Account", value = accountSpoiler(), inline = true },
+                        { name = "Result", value = "Webhook working correctly", inline = true },
+                }
+                return { username = "PS2 Hub", embeds = { embed } }
+        end
+
+        function WebhookController.buildClanObtainedPayload(clanName, spins)
+                local embed = baseEmbed("Desired Clan Obtained", 5763719, "The selected Desired Clan was just obtained.")
+                embed.fields = {
+                        { name = "Clan", value = tostring(clanName or "?"), inline = true },
+                        { name = "Account", value = accountSpoiler(), inline = true },
+                }
+                if spins ~= nil then
+                        table.insert(embed.fields, { name = "Spins (session)", value = tostring(spins), inline = true })
+                end
+                return { username = "PS2 Hub", embeds = { embed } }
+        end
+
+        function WebhookController.buildBossTestPayload()
+                local embed = baseEmbed("Boss Farm Webhook Test", 3447003, "This is a test notification - no boss was killed.")
+                embed.fields = {
+                        { name = "Account", value = accountSpoiler(), inline = true },
+                        { name = "Result", value = "Webhook working correctly", inline = true },
+                }
+                return { username = "PS2 Hub", embeds = { embed } }
+        end
+
+        function WebhookController.buildBossKillPayload(bossName, drops)
+                local embed = baseEmbed("Boss Farm Kill", 15158332, nil)
+                embed.fields = {
+                        { name = "Boss", value = tostring(bossName or "?"), inline = true },
+                        { name = "Account", value = accountSpoiler(), inline = true },
+                }
+                if type(drops) == "table" and #drops > 0 then
+                        table.insert(embed.fields, { name = "Drops", value = table.concat(drops, ", "), inline = false })
+                elseif type(drops) == "string" and drops ~= "" then
+                        table.insert(embed.fields, { name = "Drops", value = drops, inline = false })
+                end
+                return { username = "PS2 Hub", embeds = { embed } }
+        end
+
+        function WebhookController.setClanEnabled(enabled)
+                WebhookController.clan.enabled = enabled and true or false
+                if WebhookController.clan.enabled and Util.trim(WebhookController.clan.url) == "" then
+                        WebhookController.clan.status = "Webhook URL required"
+                elseif WebhookController.clan.enabled then
+                        WebhookController.clan.status = "Ready - waiting for the Desired Clan"
+                end
+                return WebhookController.clan.enabled
+        end
+
+        function WebhookController.setClanUrl(url)
+                WebhookController.clan.url = Util.trim(url or "")
+                if WebhookController.clan.url == "" then
+                        WebhookController.clan.status = "Webhook URL required"
+                else
+                        WebhookController.clan.status = "URL set - send a test to verify"
+                end
+                return WebhookController.clan.url
+        end
+
+        function WebhookController.setClanNotifyDesired(enabled)
+                WebhookController.clan.notifyDesired = enabled and true or false
+                return WebhookController.clan.notifyDesired
+        end
+
+        function WebhookController.setBossEnabled(enabled)
+                WebhookController.boss.enabled = enabled and true or false
+                if WebhookController.boss.enabled and Util.trim(WebhookController.boss.url) == "" then
+                        WebhookController.boss.status = "Webhook URL required"
+                elseif WebhookController.boss.enabled then
+                        WebhookController.boss.status = "Ready - waiting for boss kills"
+                end
+                return WebhookController.boss.enabled
+        end
+
+        function WebhookController.setBossUrl(url)
+                WebhookController.boss.url = Util.trim(url or "")
+                if WebhookController.boss.url == "" then
+                        WebhookController.boss.status = "Webhook URL required"
+                else
+                        WebhookController.boss.status = "URL set - send a test to verify"
+                end
+                return WebhookController.boss.url
+        end
+
+        function WebhookController.setBossNotifyKills(enabled)
+                WebhookController.boss.notifyKills = enabled and true or false
+                return WebhookController.boss.notifyKills
+        end
+
+        function WebhookController.testClanWebhook()
+                if clanTesting then
+                        return false
+                end
+                if os.clock() - clanLastTest < TEST_COOLDOWN then
+                        WebhookController.clan.status = "Please wait a moment before testing again"
+                        return false
+                end
+                local url, err = validWebhookUrl(WebhookController.clan.url)
+                if url == nil then
+                        WebhookController.clan.status = err
+                        Util.notify("Clan Webhook", err)
+                        return false
+                end
+                clanTesting = true
+                clanLastTest = os.clock()
+                WebhookController.clan.status = "Testing webhook..."
+                task.spawn(function()
+                        local ok = postWebhook(url, WebhookController.buildClanTestPayload())
+                        WebhookController.clan.status = ok and "Webhook sent successfully" or "Webhook failed"
+                        clanTesting = false
+                end)
+                return true
+        end
+
+        function WebhookController.testBossWebhook()
+                if bossTesting then
+                        return false
+                end
+                if os.clock() - bossLastTest < TEST_COOLDOWN then
+                        WebhookController.boss.status = "Please wait a moment before testing again"
+                        return false
+                end
+                local url, err = validWebhookUrl(WebhookController.boss.url)
+                if url == nil then
+                        WebhookController.boss.status = err
+                        Util.notify("Boss Farm Webhook", err)
+                        return false
+                end
+                bossTesting = true
+                bossLastTest = os.clock()
+                WebhookController.boss.status = "Testing webhook..."
+                task.spawn(function()
+                        local ok = postWebhook(url, WebhookController.buildBossTestPayload())
+                        WebhookController.boss.status = ok and "Webhook sent successfully" or "Webhook failed"
+                        bossTesting = false
+                end)
+                return true
+        end
+
+        function WebhookController.notifyClanObtained(clanName, spins)
+                if not WebhookController.clan.enabled or not WebhookController.clan.notifyDesired then
+                        return false
+                end
+                local url, err = validWebhookUrl(WebhookController.clan.url)
+                if url == nil then
+                        WebhookController.clan.status = err
+                        return false
+                end
+                WebhookController.clan.status = "Sending clan notification..."
+                task.spawn(function()
+                        local ok = postWebhook(url, WebhookController.buildClanObtainedPayload(clanName, spins))
+                        if ok then
+                                WebhookController.clan.status = "Clan notification sent"
+                        else
+                                WebhookController.clan.status = "Webhook failed"
+                                if not clanFailAnnounced then
+                                        clanFailAnnounced = true
+                                        Logger.warn("clan webhook notification failed - no auto retry, will try again on the next obtain")
+                                end
+                        end
+                end)
+                return true
+        end
+
+        function WebhookController.notifyBossKilled(bossName, drops)
+                if not WebhookController.boss.enabled or not WebhookController.boss.notifyKills then
+                        return false
+                end
+                local url, err = validWebhookUrl(WebhookController.boss.url)
+                if url == nil then
+                        WebhookController.boss.status = err
+                        return false
+                end
+                WebhookController.boss.status = "Sending boss kill notification..."
+                task.spawn(function()
+                        local ok = postWebhook(url, WebhookController.buildBossKillPayload(bossName, drops))
+                        if ok then
+                                WebhookController.boss.status = "Boss kill notification sent"
+                        else
+                                WebhookController.boss.status = "Webhook failed"
+                                if not bossFailAnnounced then
+                                        bossFailAnnounced = true
+                                        Logger.warn("boss webhook notification failed - no auto retry, will try again on the next kill")
+                                end
+                        end
+                end)
+                return true
+        end
+
+        function WebhookController.getClanStatusText()
+                return WebhookController.clan.status
+        end
+
+        function WebhookController.getBossStatusText()
+                return WebhookController.boss.status
+        end
+end
+
 local ESPController = {}
 do
         ESPController.options = {
@@ -2093,7 +2368,7 @@ local ClanController = {}
 do
         ClanController.settings = {
                 enabled = false,
-                mode = "Reroll Once",
+                mode = "Spin Once",
                 target = "",
                 delay = 1.5,
                 maxRerolls = 10,
@@ -2163,18 +2438,18 @@ do
         end
 
         function ClanController.doReroll()
-                if not GameDetector.requireGame("Clan Reroll") then
+                if not GameDetector.requireGame("Auto Spin Clan") then
                         return nil
                 end
                 if GameProfile.get("clans.rerollRemote") and GameProfile.get("clans.rerollRemote") ~= "" then
                         fireRerollRemote()
                 elseif GameProfile.get("clans.rerollButton") and GameProfile.get("clans.rerollButton") ~= "" then
                         if not triggerRerollButton() then
-                                Util.notify("Clan Reroll", "Reroll button not reachable")
+                                Util.notify("Auto Spin Clan", "Spin button not reachable")
                                 return nil
                         end
                 else
-                        Util.notify("Clan Reroll", "No reroll action data in profile yet")
+                        Util.notify("Auto Spin Clan", "No spin action data in profile yet")
                         return nil
                 end
                 ClanController.sessionRerolls += 1
@@ -2189,30 +2464,31 @@ do
                         return want
                 end
                 if enabled then
-                        if not GameDetector.requireGame("Clan Reroll") then
+                        if not GameDetector.requireGame("Auto Spin Clan") then
                                 return false
                         end
                         local hasRemote = (GameProfile.get("clans.rerollRemote") or "") ~= ""
                         local hasButton = (GameProfile.get("clans.rerollButton") or "") ~= ""
                         if not hasRemote and not hasButton then
-                                Util.notify("Clan Reroll", "Locked until clan menu instance data is added", 5)
+                                Util.notify("Auto Spin Clan", "Locked until clan menu instance data is added", 5)
                                 return false
                         end
                         ClanController.settings.enabled = true
                         Tracker.setRunning("clan", true)
-                        if ClanController.settings.mode == "Reroll Until Target" then
+                        if ClanController.settings.mode == "Spin Until Target" then
                                 rerollLoopActive = true
                                 task.spawn(function()
                                         local attempts = 0
                                         while rerollLoopActive and Tracker.isRunning("clan") do
                                                 if attempts >= ClanController.settings.maxRerolls then
-                                                        Util.notify("Clan Reroll", "Reroll limit reached (" .. attempts .. ")")
+                                                        Util.notify("Auto Spin Clan", "Spin limit reached (" .. attempts .. ")")
                                                         break
                                                 end
                                                 attempts += 1
                                                 local result = ClanController.doReroll()
                                                 if result and ClanController.settings.target ~= "" and result == ClanController.settings.target then
-                                                        Util.notify("Clan Reroll", "Target clan obtained: " .. result)
+                                                        Util.notify("Auto Spin Clan", "Desired clan obtained: " .. result)
+                                                        WebhookController.notifyClanObtained(result, ClanController.sessionRerolls)
                                                         break
                                                 end
                                                 task.wait(0.2)
@@ -2228,7 +2504,7 @@ do
                                                 ClanController.doReroll()
                                         end
                                         rerollLoopActive = false
-                                        Util.notify("Clan Reroll", "Done - " .. attempts .. " reroll(s)")
+                                        Util.notify("Auto Spin Clan", "Done - " .. attempts .. " spin(s)")
                                 end)
                         else
                                 task.spawn(function()
@@ -2245,7 +2521,13 @@ do
         end
 
         function ClanController.setMode(mode)
-                ClanController.settings.mode = mode or "Reroll Once"
+                local value = mode or "Spin Once"
+                if value == "Reroll Once" then
+                        value = "Spin Once"
+                elseif value == "Reroll Until Target" then
+                        value = "Spin Until Target"
+                end
+                ClanController.settings.mode = value
         end
 
         function ClanController.setTarget(clan)
@@ -2261,12 +2543,15 @@ do
         end
 
         function ClanController.rerollOnce()
-                if not GameDetector.requireGame("Clan Reroll") then
+                if not GameDetector.requireGame("Auto Spin Clan") then
                         return false, "Locked until release"
                 end
                 local result = ClanController.doReroll()
                 if result == nil then
-                        return false, "Reroll could not fire"
+                        return false, "Spin could not fire"
+                end
+                if ClanController.settings.target ~= "" and result == ClanController.settings.target then
+                        WebhookController.notifyClanObtained(result, ClanController.sessionRerolls)
                 end
                 return true, result
         end
@@ -2288,9 +2573,9 @@ do
 
         function ClanController.getStatusText()
                 if GameDetector.isGameReady() then
-                        return "Current clan: " .. ClanController.getCurrentClan() .. " | Rerolls this session: " .. tostring(ClanController.sessionRerolls)
+                        return "Current clan: " .. ClanController.getCurrentClan() .. " | Spins this session: " .. tostring(ClanController.sessionRerolls)
                 end
-                return "Clan reroll runs through the in-game main menu. Locked until release - menu instance data required. Rerolls this session: " .. tostring(ClanController.sessionRerolls)
+                return "Clan spins run through the in-game main menu. Locked until release - menu instance data required. Spins this session: " .. tostring(ClanController.sessionRerolls)
         end
 end
 
@@ -2999,6 +3284,8 @@ local KillAuraController = {}
 do
         KillAuraController.settings = {
                 enabled = false,
+                range = 12,
+                interval = 0.25,
         }
         KillAuraController.status = {
                 state = "Disabled",
@@ -3029,11 +3316,23 @@ do
 
         local function killAuraLoop()
                 while Tracker.isRunning("killaura") do
-                        task.wait(0.25)
+                        task.wait(KillAuraController.settings.interval)
                         local target = resolveTarget()
                         if target ~= nil then
                                 KillAuraController.setCurrentTarget(target)
-                                CombatHandler.attack(target)
+                                local targetRoot = nil
+                                pcall(function()
+                                        targetRoot = target:FindFirstChild("HumanoidRootPart")
+                                end)
+                                local myRoot = Util.getRoot()
+                                if targetRoot and myRoot then
+                                        local distance = (targetRoot.Position - myRoot.Position).Magnitude
+                                        if distance <= KillAuraController.settings.range then
+                                                CombatHandler.attack(target)
+                                        end
+                                else
+                                        CombatHandler.attack(target)
+                                end
                         end
                 end
         end
@@ -3059,6 +3358,16 @@ do
                 KillAuraController.currentTarget = nil
                 KillAuraController.status.targetName = "None"
                 return true
+        end
+
+        function KillAuraController.setRange(value)
+                KillAuraController.settings.range = math.clamp(value, 4, 100)
+                return KillAuraController.settings.range
+        end
+
+        function KillAuraController.setInterval(value)
+                KillAuraController.settings.interval = math.clamp(value, 0.05, 2)
+                return KillAuraController.settings.interval
         end
 
         function KillAuraController.getStatusText()
@@ -3647,7 +3956,7 @@ pcall(function()
 end)
 local MainTab = Window:CreateTab({ name = "Main" })
 local TeleportsTab = Window:CreateTab({ name = "Teleports" })
-local ClanTab = Window:CreateTab({ name = "Clan" })
+local ClanTab = Window:CreateTab({ name = "Auto Spin Clan" })
 pcall(function()
         Window:CreateSection({ name = "System" })
 end)
@@ -3809,7 +4118,7 @@ do
                         elseif Tracker.isRunning("autoboss") then
                                 taskLine = "Auto Boss: " .. AutoBossController.getBossText()
                         elseif Tracker.isRunning("clan") then
-                                taskLine = "Clan reroll active - " .. tostring(ClanController.sessionRerolls) .. " reroll(s)"
+                                taskLine = "Auto Spin Clan active - " .. tostring(ClanController.sessionRerolls) .. " spin(s)"
                         end
                         pcall(function()
                                 Elements.homeGame:Set(gameName)
@@ -3833,7 +4142,7 @@ do
         HomeTab:CreateSection({ name = "Game Support" })
         HomeTab:CreateText({
                 name = "Project Slayers 2",
-                text = "Game-specific features (Auto Quest, Auto Demon, Auto Boss, Kill Aura, Clan Reroll) stay locked until the game releases and the instance data is added. The Teleports tab runs as a framework now and fills its location list once the map detection arrives. Universal features work in every game.",
+                text = "Game-specific features (Auto Quest, Auto Demon, Auto Boss, Kill Aura, Auto Spin Clan) stay locked until the game releases and the instance data is added. The Teleports tab runs as a framework now and fills its location list once the map detection arrives. Universal features work in every game.",
         })
         HomeTab:CreateButton({
                 name = "Check for Updates",
@@ -4207,7 +4516,7 @@ do
         MainTab:CreateSection({ name = "Auto Quest" })
         MainTab:CreateText({
                 name = "Locked",
-                text = "Auto Quest, Auto Demon and Auto Boss need Project Slayers 2 instance data (quests, NPCs, bosses, Spider Lilies, remotes) and unlock automatically once the game profile loads. Location teleporting lives in the Teleports tab - the location list fills in once the map detection arrives with the instance file.",
+                text = "Auto Quest, Auto Demon, Auto Boss and Kill Aura need Project Slayers 2 instance data (quests, NPCs, bosses, Spider Lilies, remotes) and unlock automatically once the game profile loads. Location teleporting lives in the Teleports tab - the location list fills in once the map detection arrives with the instance file.",
         })
         local autoQuestToggle
         autoQuestToggle = MainTab:CreateToggle({
@@ -4426,6 +4735,30 @@ do
                 end,
         })
         lockUntilRelease(refreshBossesButton)
+
+        MainTab:CreateSection({ name = "Kill Aura" })
+        local killAuraToggle
+        killAuraToggle = MainTab:CreateToggle({
+                name = "Kill Aura",
+                description = "Automatically attacks the current Auto Quest target or the selected boss",
+                value = false,
+                flag = "SetKillAura",
+                callback = function(value)
+                        local ok = KillAuraController.setEnabled(value)
+                        if value and not ok then
+                                safeSet(killAuraToggle, false)
+                        end
+                end,
+        })
+        Elements.killAuraToggle = killAuraToggle
+        lockUntilRelease(killAuraToggle)
+        if killAuraToggle.value and not GameDetector.isGameReady() then
+                safeSet(killAuraToggle, false)
+        end
+        Elements.killAuraStatus = MainTab:CreateText({
+                name = "Kill Aura Status",
+                text = KillAuraController.getStatusText(),
+        })
 
         tryCreate(MainTab, "CreateDivider", {})
 
@@ -4746,27 +5079,15 @@ do
 end
 
 do
-        ClanTab:CreateSection({ name = "Clan Reroll" })
+        ClanTab:CreateSection({ name = "Auto Spin Clan" })
         ClanTab:CreateText({
-                name = "Main Menu Reroll",
-                text = "Clan reroll in Project Slayers 2 is done through the game's main menu (no NPC involved). This module triggers the menu's reroll action. Locked until release - needs the menu GUI and reroll remote paths from the instance file.",
-        })
-        tryCreate(ClanTab, "CreateInput", {
-                name = "Target Clan",
-                placeholder = "Clan name (case-insensitive)",
-                flag = "ClanTarget",
-                callback = function(text)
-                        ClanController.setTarget(Util.trim(text))
-                end,
-        })
-        Elements.clanStatus = ClanTab:CreateText({
-                name = "Status",
-                text = ClanController.getStatusText(),
+                name = "How It Works",
+                text = "Clan spins in Project Slayers 2 run through the game's main menu. Pick a Desired Clan, and Auto Spin keeps spinning until it lands. The Clan Webhook below is completely separate from the Boss Farm Webhook in Config.",
         })
         local clanToggle
         clanToggle = ClanTab:CreateToggle({
-                name = "Auto Reroll",
-                description = "Rerolls until the target clan or the reroll limit",
+                name = "Auto Spin Clan",
+                description = "Spins until the Desired Clan or the spin limit",
                 value = false,
                 flag = "ClanEnable",
                 callback = function(value)
@@ -4782,10 +5103,41 @@ do
                 safeSet(clanToggle, false)
         end
 
+        local clanDropdown
+        clanDropdown = ClanTab:CreateDropdown({
+                name = "Desired Clan",
+                options = ClanController.getClanOptions(),
+                placeholder = "Select Clan",
+                description = "Filled from the game's clan list once the instance file is loaded",
+                forgetState = true,
+                callback = function(option)
+                        ClanController.setTarget(normalizeChoice(option))
+                end,
+        })
+        GameProfile.onLoad(function()
+                pcall(function()
+                        clanDropdown:Refresh(ClanController.getClanOptions())
+                end)
+        end)
+        local refreshClansButton
+        refreshClansButton = ClanTab:CreateButton({
+                name = "Refresh Clan List",
+                callback = function()
+                        if not GameDetector.requireGame("Auto Spin Clan") then
+                                return
+                        end
+                        pcall(function()
+                                clanDropdown:Refresh(ClanController.getClanOptions())
+                        end)
+                        Util.notify("Auto Spin Clan", #ClanController.getClanOptions() .. " clan option(s) loaded")
+                end,
+        })
+        lockUntilRelease(refreshClansButton)
+
         ClanTab:CreateDropdown({
                 name = "Stop Mode",
-                options = { "Reroll Once", "Fixed Count", "Reroll Until Target" },
-                value = "Reroll Once",
+                options = { "Spin Once", "Fixed Count", "Spin Until Target" },
+                value = "Spin Once",
                 flag = "ClanMode",
                 callback = function(option)
                         ClanController.setMode(normalizeChoice(option))
@@ -4794,7 +5146,7 @@ do
 
         local clanRow = ClanTab:CreateGroup()
         clanRow:CreateSlider({
-                name = "Max Rerolls",
+                name = "Max Spins",
                 range = { 1, 200 },
                 increment = 1,
                 value = 10,
@@ -4803,29 +5155,30 @@ do
                         ClanController.setMaxRerolls(value)
                 end,
         })
-        local rerollButton
-        rerollButton = clanRow:CreateButton({
-                name = "Reroll Once",
-                description = "Fires the reroll right now, no loop",
+        local clanStatusText
+        local spinButton
+        spinButton = clanRow:CreateButton({
+                name = "Spin Once",
+                description = "Fires one spin right now, no loop",
                 callback = function()
                         task.spawn(function()
                                 local ok, msg = ClanController.rerollOnce()
                                 if ok then
-                                        Util.notify("Clan", "Reroll fired (" .. tostring(ClanController.sessionRerolls) .. " total) - " .. tostring(msg))
+                                        Util.notify("Auto Spin Clan", "Spin fired (" .. tostring(ClanController.sessionRerolls) .. " total) - " .. tostring(msg))
                                 else
-                                        Util.notify("Clan", tostring(msg))
+                                        Util.notify("Auto Spin Clan", tostring(msg))
                                 end
                                 pcall(function()
-                                        Elements.clanStatus:Set(ClanController.getStatusText())
+                                        clanStatusText:Set(ClanController.getStatusText())
                                 end)
                         end)
                 end,
         })
-        lockUntilRelease(rerollButton)
+        lockUntilRelease(spinButton)
 
         local clanRow2 = ClanTab:CreateGroup()
         clanRow2:CreateSlider({
-                name = "Reroll Delay",
+                name = "Spin Delay",
                 range = { 0.5, 10 },
                 increment = 0.5,
                 suffix = " s",
@@ -4835,31 +5188,87 @@ do
                         ClanController.setDelay(value)
                 end,
         })
-        Elements.statRerolls = clanRow2:CreateStat({ name = "Rerolls", value = 0 })
+        Elements.statRerolls = clanRow2:CreateStat({ name = "Spins", value = 0 })
 
-        ClanTab:CreateButton({
-                name = "Refresh Clan Status",
-                callback = function()
-                        pcall(function()
-                                Elements.clanStatus:Set(ClanController.getStatusText())
-                        end)
+        Elements.clanCurrent = ClanTab:CreateText({
+                name = "Current Clan",
+                text = ClanController.getCurrentClan(),
+        })
+        clanStatusText = ClanTab:CreateText({
+                name = "Spin Status",
+                text = ClanController.getStatusText(),
+        })
+        Elements.clanStatus = clanStatusText
+
+        ClanTab:CreateSection({ name = "Clan Webhook" })
+        ClanTab:CreateText({
+                name = "Separate Webhook",
+                text = "This webhook is independent from the Boss Farm Webhook in Config - it needs its own URL. With Desired Clan Notification on, a message fires only when the Desired Clan above is actually obtained (account hidden behind a spoiler), never for ordinary spins.",
+        })
+        local clanWebhookToggle
+        clanWebhookToggle = ClanTab:CreateToggle({
+                name = "Enable Clan Webhook",
+                value = false,
+                flag = "ClanWebhookEnable",
+                callback = function(value)
+                        WebhookController.setClanEnabled(value)
                 end,
+        })
+        Elements.clanWebhookToggle = clanWebhookToggle
+        tryCreate(ClanTab, "CreateInput", {
+                name = "Webhook URL",
+                placeholder = "https://discord.com/api/webhooks/...",
+                flag = "ClanWebhookUrl",
+                callback = function(text)
+                        WebhookController.setClanUrl(text)
+                end,
+        })
+        local clanNotifyToggle
+        clanNotifyToggle = ClanTab:CreateToggle({
+                name = "Desired Clan Notification",
+                description = "Webhook fires only when the Desired Clan is obtained",
+                value = true,
+                flag = "ClanWebhookNotifyDesired",
+                callback = function(value)
+                        WebhookController.setClanNotifyDesired(value)
+                end,
+        })
+        Elements.clanNotifyToggle = clanNotifyToggle
+        local clanWebhookRow = ClanTab:CreateGroup()
+        clanWebhookRow:CreateButton({
+                name = "Test Webhook",
+                description = "Sends a clearly labeled test message - no clan is announced",
+                callback = function()
+                        WebhookController.testClanWebhook()
+                end,
+        })
+        Elements.clanWebhookStatus = ClanTab:CreateText({
+                name = "Webhook Status",
+                text = WebhookController.getClanStatusText(),
         })
 
         Tracker.setRunning("clanstatus", true)
         task.spawn(function()
-                local lastLine = nil
-                local lastRerolls = -1
+                local lastValues = {}
+                local function syncText(key, value)
+                        if lastValues[key] ~= value and Elements[key] then
+                                lastValues[key] = value
+                                pcall(function()
+                                        Elements[key]:Set(value)
+                                end)
+                        end
+                end
                 while Tracker.isRunning("clanstatus") do
                         task.wait(2)
-                        local line = ClanController.getStatusText()
-                        local rerolls = ClanController.sessionRerolls
-                        if line ~= lastLine or rerolls ~= lastRerolls then
-                                lastLine = line
-                                lastRerolls = rerolls
+                        syncText("clanStatus", ClanController.getStatusText())
+                        syncText("clanCurrent", ClanController.getCurrentClan())
+                        syncText("clanWebhookStatus", WebhookController.getClanStatusText())
+                        syncText("bossWebhookStatus", WebhookController.getBossStatusText())
+                        local spins = ClanController.sessionRerolls
+                        if lastValues.spins ~= spins then
+                                lastValues.spins = spins
                                 pcall(function()
-                                        Elements.clanStatus:Set(line)
-                                        Elements.statRerolls:Set(rerolls)
+                                        Elements.statRerolls:Set(spins)
                                 end)
                         end
                 end
@@ -5202,28 +5611,78 @@ do
                 end,
         })
 
-        ConfigTab:CreateSection({ name = "Kill Aura" })
-        local killAuraToggle
-        killAuraToggle = ConfigTab:CreateToggle({
-                name = "Kill Aura",
-                description = "Automatically attacks the current Auto Quest target or the selected boss",
-                value = false,
-                flag = "SetKillAura",
+        ConfigTab:CreateSection({ name = "Kill Aura Config" })
+        local killAuraRow = ConfigTab:CreateGroup()
+        killAuraRow:CreateSlider({
+                name = "Kill Aura Range",
+                range = { 4, 100 },
+                increment = 1,
+                suffix = " studs",
+                value = 12,
+                description = "Attacks targets within this distance",
+                flag = "SetKillAuraRange",
                 callback = function(value)
-                        local ok = KillAuraController.setEnabled(value)
-                        if value and not ok then
-                                safeSet(killAuraToggle, false)
-                        end
+                        KillAuraController.setRange(value)
                 end,
         })
-        Elements.killAuraToggle = killAuraToggle
-        lockUntilRelease(killAuraToggle)
-        if killAuraToggle.value and not GameDetector.isGameReady() then
-                safeSet(killAuraToggle, false)
-        end
-        Elements.killAuraStatus = ConfigTab:CreateText({
-                name = "Kill Aura Status",
-                text = KillAuraController.getStatusText(),
+        killAuraRow:CreateSlider({
+                name = "Kill Aura Interval",
+                range = { 0.05, 2 },
+                increment = 0.05,
+                suffix = " s",
+                value = 0.25,
+                description = "Time between attacks",
+                flag = "SetKillAuraInterval",
+                callback = function(value)
+                        KillAuraController.setInterval(value)
+                end,
+        })
+
+        ConfigTab:CreateSection({ name = "Boss Farm Webhook" })
+        ConfigTab:CreateText({
+                name = "Separate Webhook",
+                text = "Independent from the Clan Webhook in the Auto Spin Clan tab - it needs its own URL. Fires when a farmed boss dies, with drops and a spoiler-hidden account name once the game data is wired up.",
+        })
+        local bossWebhookToggle
+        bossWebhookToggle = ConfigTab:CreateToggle({
+                name = "Enable Boss Farm Webhook",
+                value = false,
+                flag = "BossWebhookEnable",
+                callback = function(value)
+                        WebhookController.setBossEnabled(value)
+                end,
+        })
+        Elements.bossWebhookToggle = bossWebhookToggle
+        tryCreate(ConfigTab, "CreateInput", {
+                name = "Webhook URL",
+                placeholder = "https://discord.com/api/webhooks/...",
+                flag = "BossWebhookUrl",
+                callback = function(text)
+                        WebhookController.setBossUrl(text)
+                end,
+        })
+        local bossNotifyToggle
+        bossNotifyToggle = ConfigTab:CreateToggle({
+                name = "Boss Kill Notifications",
+                description = "Webhook fires when a farmed boss dies",
+                value = true,
+                flag = "BossWebhookNotifyKills",
+                callback = function(value)
+                        WebhookController.setBossNotifyKills(value)
+                end,
+        })
+        Elements.bossNotifyToggle = bossNotifyToggle
+        local bossWebhookRow = ConfigTab:CreateGroup()
+        bossWebhookRow:CreateButton({
+                name = "Test Webhook",
+                description = "Sends a clearly labeled test message - no kill is announced",
+                callback = function()
+                        WebhookController.testBossWebhook()
+                end,
+        })
+        Elements.bossWebhookStatus = ConfigTab:CreateText({
+                name = "Webhook Status",
+                text = WebhookController.getBossStatusText(),
         })
 
         tryCreate(ConfigTab, "CreateDivider", {})
