@@ -1,4 +1,4 @@
-local VERSION = "2.5.0"
+local VERSION = "2.6.0"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
@@ -3646,12 +3646,13 @@ pcall(function()
         Window:CreateSection({ name = "Game" })
 end)
 local MainTab = Window:CreateTab({ name = "Main" })
+local TeleportsTab = Window:CreateTab({ name = "Teleports" })
 local ClanTab = Window:CreateTab({ name = "Clan" })
 pcall(function()
         Window:CreateSection({ name = "System" })
 end)
+local ConfigTab = Window:CreateTab({ name = "Config" })
 local SettingsTab = Window:CreateTab({ name = "Settings" })
-local UiSettingsTab = Window:CreateTab({ name = "UI Settings" })
 
 local Elements = {}
 
@@ -3832,7 +3833,7 @@ do
         HomeTab:CreateSection({ name = "Game Support" })
         HomeTab:CreateText({
                 name = "Project Slayers 2",
-                text = "Game-specific features (Auto Quest, Auto Demon, Auto Boss, Kill Aura, Clan Reroll) stay locked until the game releases and the instance data is added. Teleports runs as a framework now and fills its location list once the map detection arrives. Universal features work in every game.",
+                text = "Game-specific features (Auto Quest, Auto Demon, Auto Boss, Kill Aura, Clan Reroll) stay locked until the game releases and the instance data is added. The Teleports tab runs as a framework now and fills its location list once the map detection arrives. Universal features work in every game.",
         })
         HomeTab:CreateButton({
                 name = "Check for Updates",
@@ -4206,7 +4207,7 @@ do
         MainTab:CreateSection({ name = "Auto Quest" })
         MainTab:CreateText({
                 name = "Locked",
-                text = "Auto Quest, Auto Demon and Auto Boss need Project Slayers 2 instance data (quests, NPCs, bosses, Spider Lilies, remotes) and unlock automatically once the game profile loads. Teleports is live as a framework - it finds no locations until the map detection arrives with the instance file.",
+                text = "Auto Quest, Auto Demon and Auto Boss need Project Slayers 2 instance data (quests, NPCs, bosses, Spider Lilies, remotes) and unlock automatically once the game profile loads. Location teleporting lives in the Teleports tab - the location list fills in once the map detection arrives with the instance file.",
         })
         local autoQuestToggle
         autoQuestToggle = MainTab:CreateToggle({
@@ -4428,67 +4429,6 @@ do
 
         tryCreate(MainTab, "CreateDivider", {})
 
-        MainTab:CreateSection({ name = "Teleports" })
-        local locationDropdown
-        locationDropdown = MainTab:CreateDropdown({
-                name = "Location",
-                options = TeleportController.getLocationOptions(),
-                placeholder = "Select Location",
-                description = "Type to search - filled automatically by the map scan",
-                forgetState = true,
-                callback = function(option)
-                        TeleportController.setSelectedLocation(normalizeChoice(option))
-                end,
-        })
-        TeleportController.onLocationsChanged(function()
-                pcall(function()
-                        locationDropdown:Refresh(TeleportController.getLocationOptions())
-                end)
-        end)
-        local syncLocationStatus = function() end
-        local teleportRow = MainTab:CreateGroup()
-        teleportRow:CreateButton({
-                name = "Refresh Locations",
-                callback = function()
-                        task.spawn(function()
-                                local count = TeleportController.RefreshLocations()
-                                Util.toast("Locations found: " .. count)
-                                syncLocationStatus()
-                        end)
-                end,
-        })
-        teleportRow:CreateButton({
-                name = "Teleport",
-                callback = function()
-                        task.spawn(function()
-                                TeleportController.TeleportToLocation()
-                                syncLocationStatus()
-                        end)
-                end,
-        })
-        local teleportAutoRefreshToggle
-        teleportAutoRefreshToggle = MainTab:CreateToggle({
-                name = "Auto Refresh Locations",
-                description = "Re-scans the map every 30 s while enabled",
-                value = false,
-                flag = "TeleportAutoRefresh",
-                callback = function(value)
-                        TeleportController.setAutoRefresh(value)
-                end,
-        })
-        Elements.teleportAutoRefresh = teleportAutoRefreshToggle
-        Elements.locationStatus = MainTab:CreateText({
-                name = "Location Status",
-                text = TeleportController.getStatusText(),
-        })
-        syncLocationStatus = function()
-                pcall(function()
-                        Elements.locationStatus:Set(TeleportController.getStatusText())
-                end)
-        end
-
-        tryCreate(MainTab, "CreateDivider", {})
-
         MainTab:CreateSection({ name = "Targets" })
         local targetDropdown = MainTab:CreateDropdown({
                 name = "Selected Target",
@@ -4674,9 +4614,6 @@ do
                 pcall(function()
                         bossDropdown:Refresh(AutoBossController.getBossOptions())
                 end)
-                task.spawn(function()
-                        TeleportController.RefreshLocations()
-                end)
         end)
 
         Tracker.setRunning("automationstatus", true)
@@ -4704,7 +4641,6 @@ do
                         syncText("bossBlock", "State: " .. AutoBossController.getStatusText()
                                 .. "\nBoss: " .. AutoBossController.getBossText())
                         syncText("killAuraStatus", KillAuraController.getStatusText())
-                        syncText("locationStatus", TeleportController.getStatusText())
                         local lilies = AutoDemonController.getCollected()
                         if lilies ~= lastLilies then
                                 lastLilies = lilies
@@ -4717,6 +4653,92 @@ do
                                 lastBossHealth = bossHealth
                                 pcall(function()
                                         Elements.bossHealth:Set(bossHealth)
+                                end)
+                        end
+                end
+        end)
+end
+
+do
+        TeleportsTab:CreateSection({ name = "Locations" })
+        TeleportsTab:CreateText({
+                name = "Location Detection",
+                text = "Locations are detected from the game once the instance file is loaded - nothing is hardcoded. The scan removes duplicates and fills this list automatically; Teleport then moves you to the selected location.",
+        })
+        local locationDropdown
+        locationDropdown = TeleportsTab:CreateDropdown({
+                name = "Location",
+                options = TeleportController.getLocationOptions(),
+                placeholder = "Select Location",
+                description = "Type to search - filled automatically by the map scan",
+                forgetState = true,
+                callback = function(option)
+                        TeleportController.setSelectedLocation(normalizeChoice(option))
+                end,
+        })
+        TeleportController.onLocationsChanged(function()
+                pcall(function()
+                        locationDropdown:Refresh(TeleportController.getLocationOptions())
+                end)
+        end)
+        local syncLocationStatus = function() end
+        local teleportRow = TeleportsTab:CreateGroup()
+        teleportRow:CreateButton({
+                name = "Refresh Locations",
+                callback = function()
+                        task.spawn(function()
+                                local count = TeleportController.RefreshLocations()
+                                Util.toast("Locations found: " .. count)
+                                syncLocationStatus()
+                        end)
+                end,
+        })
+        teleportRow:CreateButton({
+                name = "Teleport",
+                callback = function()
+                        task.spawn(function()
+                                TeleportController.TeleportToLocation()
+                                syncLocationStatus()
+                        end)
+                end,
+        })
+        local teleportAutoRefreshToggle
+        teleportAutoRefreshToggle = TeleportsTab:CreateToggle({
+                name = "Auto Refresh Locations",
+                description = "Re-scans the map every 30 s while enabled",
+                value = false,
+                flag = "TeleportAutoRefresh",
+                callback = function(value)
+                        TeleportController.setAutoRefresh(value)
+                end,
+        })
+        Elements.teleportAutoRefresh = teleportAutoRefreshToggle
+        Elements.locationStatus = TeleportsTab:CreateText({
+                name = "Location Status",
+                text = TeleportController.getStatusText(),
+        })
+        syncLocationStatus = function()
+                pcall(function()
+                        Elements.locationStatus:Set(TeleportController.getStatusText())
+                end)
+        end
+
+        GameProfile.onLoad(function()
+                task.spawn(function()
+                        TeleportController.RefreshLocations()
+                end)
+        end)
+
+        Tracker.setRunning("teleportstatus", true)
+        task.spawn(function()
+                local lastStatus = nil
+                while Tracker.isRunning("teleportstatus") do
+                        task.wait(2)
+                        local status = TeleportController.getStatusText()
+                        if status ~= lastStatus then
+                                lastStatus = status
+                                pcall(function()
+                                        Elements.locationStatus:Set(status)
                                 end)
                         end
                 end
@@ -5156,8 +5178,8 @@ do
 end
 
 do
-        SettingsTab:CreateSection({ name = "Auto Quest Settings" })
-        SettingsTab:CreateDropdown({
+        ConfigTab:CreateSection({ name = "Auto Quest Config" })
+        ConfigTab:CreateDropdown({
                 name = "Quest Combat Method",
                 options = { "Melee", "Sword" },
                 value = "Melee",
@@ -5168,8 +5190,8 @@ do
                 end,
         })
 
-        SettingsTab:CreateSection({ name = "Auto Boss Settings" })
-        SettingsTab:CreateDropdown({
+        ConfigTab:CreateSection({ name = "Auto Boss Config" })
+        ConfigTab:CreateDropdown({
                 name = "Boss Combat Method",
                 options = { "Melee", "Sword" },
                 value = "Melee",
@@ -5180,9 +5202,9 @@ do
                 end,
         })
 
-        SettingsTab:CreateSection({ name = "Kill Aura" })
+        ConfigTab:CreateSection({ name = "Kill Aura" })
         local killAuraToggle
-        killAuraToggle = SettingsTab:CreateToggle({
+        killAuraToggle = ConfigTab:CreateToggle({
                 name = "Kill Aura",
                 description = "Automatically attacks the current Auto Quest target or the selected boss",
                 value = false,
@@ -5199,15 +5221,15 @@ do
         if killAuraToggle.value and not GameDetector.isGameReady() then
                 safeSet(killAuraToggle, false)
         end
-        Elements.killAuraStatus = SettingsTab:CreateText({
+        Elements.killAuraStatus = ConfigTab:CreateText({
                 name = "Kill Aura Status",
                 text = KillAuraController.getStatusText(),
         })
 
-        tryCreate(SettingsTab, "CreateDivider", {})
+        tryCreate(ConfigTab, "CreateDivider", {})
 
-        SettingsTab:CreateSection({ name = "Performance" })
-        SettingsTab:CreateDropdown({
+        ConfigTab:CreateSection({ name = "Performance" })
+        ConfigTab:CreateDropdown({
                 name = "FPS Boost",
                 options = { "off", "basic", "full" },
                 value = "off",
@@ -5217,7 +5239,7 @@ do
                 end,
         })
         local fullbrightToggle
-        fullbrightToggle = SettingsTab:CreateToggle({
+        fullbrightToggle = ConfigTab:CreateToggle({
                 name = "Fullbright",
                 value = false,
                 flag = "SetFullbright",
@@ -5227,7 +5249,7 @@ do
         })
         Elements.fullbrightToggle = fullbrightToggle
         local autoPerfToggle
-        autoPerfToggle = SettingsTab:CreateToggle({
+        autoPerfToggle = ConfigTab:CreateToggle({
                 name = "Auto Performance",
                 description = "Slows update loops when FPS drops, restores on recovery",
                 value = false,
@@ -5238,8 +5260,8 @@ do
         })
         Elements.autoPerfToggle = autoPerfToggle
 
-        SettingsTab:CreateSection({ name = "Debug" })
-        local logConsole = SettingsTab:CreateConsole({
+        ConfigTab:CreateSection({ name = "Debug" })
+        local logConsole = ConfigTab:CreateConsole({
                 name = "Log Console",
                 height = 140,
                 follow = true,
@@ -5253,7 +5275,7 @@ do
         pcall(function()
                 logConsole:Set(Logger.getHistory())
         end)
-        local consoleRow = SettingsTab:CreateGroup()
+        local consoleRow = ConfigTab:CreateGroup()
         consoleRow:CreateButton({
                 name = "Copy Logs",
                 callback = function()
@@ -5269,7 +5291,7 @@ do
                         end)
                 end,
         })
-        local debugRow = SettingsTab:CreateGroup()
+        local debugRow = ConfigTab:CreateGroup()
         local debugToggle
         debugToggle = debugRow:CreateToggle({
                 name = "Debug Logging",
@@ -5298,7 +5320,7 @@ do
                         end
                 end,
         })
-        SettingsTab:CreateButton({
+        ConfigTab:CreateButton({
                 name = "Dump Discovered Targets",
                 description = "Prints every nearby humanoid candidate - the tool that fills GameProfile",
                 callback = function()
@@ -5307,7 +5329,7 @@ do
                         end)
                 end,
         })
-        local trackerStats = SettingsTab:CreateGroup()
+        local trackerStats = ConfigTab:CreateGroup()
         Elements.statConnections = trackerStats:CreateStat({ name = "Connections", value = 0 })
         Elements.statLoops = trackerStats:CreateStat({ name = "Loops", value = 0 })
         Tracker.setRunning("debugstats", true)
@@ -5322,13 +5344,13 @@ do
                 end
         end)
 
-        SettingsTab:CreateSection({ name = "Project" })
-        SettingsTab:CreateText({
+        ConfigTab:CreateSection({ name = "Project" })
+        ConfigTab:CreateText({
                 name = "PS2 Hub " .. VERSION,
                 text = "Made by Faludaddd. Source: " .. REPO_URL,
         })
         local autoReexecToggle
-        autoReexecToggle = SettingsTab:CreateToggle({
+        autoReexecToggle = ConfigTab:CreateToggle({
                 name = "Auto Re-execute on Teleport",
                 value = true,
                 flag = "SetAutoReexecute",
@@ -5337,7 +5359,7 @@ do
                 end,
         })
         Elements.autoReexecToggle = autoReexecToggle
-        SettingsTab:CreateKeybind({
+        ConfigTab:CreateKeybind({
                 name = "Emergency Stop Key",
                 description = "Global panic key - kills every active feature instantly",
                 value = Enum.KeyCode.P,
@@ -5347,7 +5369,7 @@ do
                         syncAllOff()
                 end,
         })
-        local lifecycleRow = SettingsTab:CreateGroup()
+        local lifecycleRow = ConfigTab:CreateGroup()
         lifecycleRow:CreateButton({
                 name = "Emergency Stop",
                 description = "Kills automation, fly, noclip, speed, ESP and more",
@@ -5384,13 +5406,13 @@ do
                         end)
                 end,
         })
-        SettingsTab:CreateButton({
+        ConfigTab:CreateButton({
                 name = "Check for Updates",
                 callback = function()
                         SettingsController.checkUpdate()
                 end,
         })
-        SettingsTab:CreateButton({
+        ConfigTab:CreateButton({
                 name = "Copy Execute URL",
                 callback = function()
                         SettingsController.copySource()
@@ -5399,10 +5421,10 @@ do
 end
 
 do
-        UiSettingsTab:CreateSection({ name = "Configuration" })
+        SettingsTab:CreateSection({ name = "Configuration" })
         local configDropdown
         local configName
-        configDropdown = UiSettingsTab:CreateDropdown({
+        configDropdown = SettingsTab:CreateDropdown({
                 name = "Saved Configs",
                 options = {},
                 placeholder = "None saved yet",
@@ -5415,7 +5437,7 @@ do
                         end
                 end,
         })
-        configName = tryCreate(UiSettingsTab, "CreateInput", {
+        configName = tryCreate(SettingsTab, "CreateInput", {
                 name = "Config Name",
                 placeholder = "e.g. Questing",
                 flag = "ConfigName",
@@ -5430,7 +5452,7 @@ do
                 end)
         end
         refreshConfigs()
-        local manageRow = UiSettingsTab:CreateGroup()
+        local manageRow = SettingsTab:CreateGroup()
         manageRow:CreateButton({
                 name = "Save",
                 description = "Snapshot current state",
@@ -5492,7 +5514,7 @@ do
                         refreshConfigs()
                 end,
         })
-        local configRow = UiSettingsTab:CreateGroup()
+        local configRow = SettingsTab:CreateGroup()
         configRow:CreateButton({
                 name = "Refresh List",
                 callback = function()
@@ -5506,9 +5528,9 @@ do
                 end,
         })
 
-        UiSettingsTab:CreateSection({ name = "Notifications" })
+        SettingsTab:CreateSection({ name = "Notifications" })
         local notificationsToggle
-        notificationsToggle = UiSettingsTab:CreateToggle({
+        notificationsToggle = SettingsTab:CreateToggle({
                 name = "Notifications",
                 description = "Cards for meaningful events",
                 value = true,
@@ -5518,7 +5540,7 @@ do
                 end,
         })
         Elements.notificationsToggle = notificationsToggle
-        UiSettingsTab:CreateSlider({
+        SettingsTab:CreateSlider({
                 name = "Notification Duration",
                 range = { 1, 15 },
                 increment = 1,
@@ -5530,9 +5552,9 @@ do
                 end,
         })
 
-        UiSettingsTab:CreateSection({ name = "Appearance" })
+        SettingsTab:CreateSection({ name = "Appearance" })
         local THEMES = { "default", "cobalt", "ember", "amethyst", "frost", "rose" }
-        UiSettingsTab:CreateDropdown({
+        SettingsTab:CreateDropdown({
                 name = "Theme",
                 options = THEMES,
                 value = "ember",
@@ -5543,7 +5565,7 @@ do
                         end)
                 end,
         })
-        UiSettingsTab:CreateKeybind({
+        SettingsTab:CreateKeybind({
                 name = "UI Toggle",
                 description = "Show / hide the window",
                 value = Enum.KeyCode.RightControl,
