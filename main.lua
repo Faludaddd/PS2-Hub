@@ -1,4 +1,4 @@
-local VERSION = "3.2.0"
+local VERSION = "4.0.0"
 local EXECUTE_URL = "https://raw.githubusercontent.com/Faludaddd/PS2-Hub/main/main.lua"
 local REPO_URL = "https://github.com/Faludaddd/PS2-Hub"
 
@@ -652,8 +652,9 @@ do
         end
 end
 
--- Shared travel engine: Auto Quest, Auto Demon, Auto Boss and the Teleports tab all move
--- through here. Instant jumps to the objective, Tween glides; neither ever walks or pathfinds.
+-- Shared one-shot travel engine: the Teleports tab and quest-giver hops move through
+-- here. Instant jumps to the objective, Tween glides; neither ever walks or pathfinds.
+-- Continuous target following lives in TargetFollow below.
 local MovementHandler = {}
 do
         MovementHandler.settings = {
@@ -664,10 +665,6 @@ do
         }
 
         local activeTween = nil
-        local tweenGoal = nil
-        local followTarget = nil
-        local followToken = 0
-        local followOwner = nil
 
         -- accepts an Instance (model/part), a CFrame, or nil
         local function resolveGoalCFrame(target)
@@ -712,7 +709,6 @@ do
                                 activeTween:Cancel()
                         end)
                         activeTween = nil
-                        tweenGoal = nil
                 end
         end
 
@@ -742,7 +738,6 @@ do
                 end)
                 if ok then
                         activeTween = tween
-                        tweenGoal = goal.Position
                 end
         end
 
@@ -759,25 +754,14 @@ do
                 MovementHandler.settings.arrivalDistance = math.clamp(value, 1, 40)
         end
 
-        function MovementHandler.isFollowing(target)
-                return Tracker.isRunning("mhfollow") and followTarget == target
-        end
-
-        -- stop(nil) halts everything (emergency stop, manual teleport); stop(owner) only
-        -- halts when that feature owns the movement, so parallel engines never fight
-        function MovementHandler.stop(owner)
-                if owner ~= nil and followOwner ~= nil and followOwner ~= owner then
-                        return false
-                end
-                followToken += 1
-                followTarget = nil
-                followOwner = nil
+        -- halts any in-flight one-shot travel (emergency stop, engine shutdown)
+        function MovementHandler.stop()
                 Tracker.setRunning("mhfollow", false)
                 stopTween()
                 return true
         end
 
-        -- one-shot travel used by the Teleports tab
+        -- one-shot travel used by the Teleports tab and quest-giver hops
         function MovementHandler.travelTo(target)
                 MovementHandler.stop()
                 local root = Util.getRoot()
@@ -793,53 +777,6 @@ do
                 return true
         end
 
-        -- continuous travel toward a (possibly moving) objective; loop callers re-invoke safely.
-        -- owner tags the calling feature so its own stop never kills another engine's travel
-        function MovementHandler.follow(target, owner)
-                if target == nil then
-                        return false
-                end
-                if MovementHandler.isFollowing(target) then
-                        return true
-                end
-                local goal = resolveGoalCFrame(target)
-                if goal == nil then
-                        return false
-                end
-                MovementHandler.stop()
-                followTarget = target
-                followOwner = owner or "default"
-                followToken += 1
-                local myToken = followToken
-                Tracker.setRunning("mhfollow", true)
-                task.spawn(function()
-                        while Tracker.isRunning("mhfollow") and followToken == myToken do
-                                local root = Util.getRoot()
-                                local goal = resolveGoalCFrame(target)
-                                if root == nil or goal == nil or target.Parent == nil then
-                                        break
-                                end
-                                local distance = (goal.Position - root.Position).Magnitude
-                                if distance <= MovementHandler.settings.arrivalDistance then
-                                        stopTween()
-                                elseif MovementHandler.settings.method == "Tween" then
-                                        local drifted = tweenGoal == nil
-                                                or (goal.Position - tweenGoal).Magnitude > MovementHandler.settings.retargetDistance
-                                        if activeTween == nil or drifted then
-                                                startTween(root, goal)
-                                        end
-                                else
-                                        instantTo(root, goal, MovementHandler.settings.arrivalDistance)
-                                end
-                                task.wait(0.25)
-                        end
-                        if followToken == myToken then
-                                MovementHandler.stop()
-                        end
-                end)
-                return true
-        end
-
         function MovementHandler.getStatusText()
                 if Tracker.isRunning("mhfollow") then
                         return "Method: " .. MovementHandler.settings.method .. " - moving to objective"
@@ -848,6 +785,254 @@ do
         end
 end
 
+-- Shared follow engine: keeps the player at a configured offset from a live target.
+-- Auto Level, Boss Farm and Spider Lily collection follow through here. The desired
+-- position recomputes from the target's real CFrame every tick, so moving targets are
+-- followed smoothly at the offset instead of being teleport-spammed onto.
+local TargetFollow = {}
+do
+        TargetFollow.POSITIONS = { "Above", "Behind", "Below", "In Front", "Left", "Right", "Custom" }
+
+        local target = nil
+        local owner = nil
+        local position = "Behind"
+        local distance = 5
+        local method = "Instant"
+        local token = 0
+        local activeTween = nil
+        local tweenGoal = nil
+        local loopAlive = false
+
+        -- Instant only re-snaps once the offset error passes this many studs, so a still
+        -- target costs zero writes and a slowly drifting target costs one snap per drift
+        local SNAP_ERROR = 2
+        -- Tween re-targets once the desired goal moved this far from the tweened goal
+        local RETARGET_DRIFT = 3
+
+        local function validPosition(pos)
+                for _, known in ipairs(TargetFollow.POSITIONS) do
+                        if known == pos then
+                                return known
+                        end
+                end
+                return "Behind"
+        end
+
+        -- accepts an Instance (model/part) or a CFrame
+        local function resolveTargetCFrame(t)
+                if typeof(t) == "CFrame" then
+                        return t
+                end
+                if typeof(t) ~= "Instance" then
+                        return nil
+                end
+                local ok, cf = pcall(function()
+                        if t:IsA("Model") then
+                                return t:GetPivot()
+                        end
+                        return t.CFrame
+                end)
+                if ok and cf then
+                        return cf
+                end
+                local part = nil
+                pcall(function()
+                        for _, d in ipairs(t:GetDescendants()) do
+                                if d:IsA("BasePart") then
+                                        part = d
+                                        break
+                                end
+                        end
+                end)
+                if part then
+                        local ok2, cf2 = pcall(function()
+                                if part.CFrame then
+                                        return part.CFrame
+                                end
+                                return CFrame.new(part.Position)
+                        end)
+                        if ok2 then
+                                return cf2
+                        end
+                end
+                return nil
+        end
+
+        -- Desired standing spot around the target, from its live position and orientation
+        local function desiredCFrame(goalCf)
+                local p = goalCf.Position
+                local look = goalCf.LookVector or Vector3.new(0, 0, -1)
+                local right = goalCf.RightVector or Vector3.new(1, 0, 0)
+                if position == "Above" then
+                        return CFrame.lookAt(p + Vector3.new(0, distance, 0), p)
+                elseif position == "Below" then
+                        return CFrame.lookAt(p - Vector3.new(0, distance, 0), p)
+                elseif position == "In Front" then
+                        return CFrame.lookAt(p + look * distance, p)
+                elseif position == "Left" then
+                        return CFrame.lookAt(p - right * distance, p)
+                elseif position == "Right" then
+                        return CFrame.lookAt(p + right * distance, p)
+                elseif position == "Custom" then
+                        -- centered on the target itself: sustained contact for touch pickups
+                        return CFrame.new(p + Vector3.new(0, 1, 0))
+                end
+                return CFrame.lookAt(p - look * distance, p)
+        end
+
+        local function stopTween()
+                if activeTween then
+                        pcall(function()
+                                activeTween:Cancel()
+                        end)
+                        activeTween = nil
+                        tweenGoal = nil
+                end
+        end
+
+        local function startTweenTo(root, desired)
+                stopTween()
+                local ok, tween = pcall(function()
+                        local dist = (desired.Position - root.Position).Magnitude
+                        local duration = math.max(dist / math.max(MovementHandler.settings.tweenSpeed, 1), 0.1)
+                        local t = TweenService:Create(root, TweenInfo.new(duration, Enum.EasingStyle.Linear), { CFrame = desired })
+                        t:Play()
+                        return t
+                end)
+                if ok then
+                        activeTween = tween
+                        tweenGoal = desired.Position
+                end
+        end
+
+        -- SetTarget(t, opts) takes the target plus optional { position, distance, method, owner }.
+        -- Settings and the target are live: a running follow loop picks changes up next tick.
+        function TargetFollow.SetTarget(t, opts)
+                if t == nil then
+                        TargetFollow.Stop()
+                        return false
+                end
+                if type(opts) == "table" then
+                        if opts.position then
+                                position = validPosition(opts.position)
+                        end
+                        if type(opts.distance) == "number" then
+                                distance = math.clamp(opts.distance, 0, 100)
+                        end
+                        if opts.method then
+                                method = (opts.method == "Tween") and "Tween" or "Instant"
+                        end
+                        if opts.owner then
+                                owner = opts.owner
+                        end
+                end
+                if target ~= t then
+                        stopTween()
+                end
+                target = t
+                return true
+        end
+
+        function TargetFollow.SetPosition(pos)
+                position = validPosition(pos)
+                return position
+        end
+
+        function TargetFollow.SetDistance(value)
+                distance = math.clamp(value, 0, 100)
+                return distance
+        end
+
+        function TargetFollow.SetMethod(m)
+                method = (m == "Tween") and "Tween" or "Instant"
+                return method
+        end
+
+        function TargetFollow.GetTarget()
+                return target
+        end
+
+        -- Stop() halts everything (emergency stop); Stop(owner) only halts a follow that
+        -- owner owns, so parallel engines never kill each other's movement
+        function TargetFollow.Stop(ownerTag)
+                if ownerTag ~= nil and owner ~= nil and owner ~= ownerTag then
+                        return false
+                end
+                token += 1
+                target = nil
+                owner = nil
+                loopAlive = false
+                stopTween()
+                Tracker.setRunning("tffollow", false)
+                return true
+        end
+
+        -- Idempotent while the loop lives: Start on a running follow is a no-op, and the
+        -- loop reads the live target/settings upvalues, so SetTarget mid-flight just
+        -- switches objective. A dead loop (unexpected exit) gets respawned by the next
+        -- Start, which is exactly how the engines re-invoke it every tick.
+        function TargetFollow.Start()
+                if target == nil then
+                        return false
+                end
+                if loopAlive then
+                        return true
+                end
+                token += 1
+                local myToken = token
+                loopAlive = true
+                Tracker.setRunning("tffollow", true)
+                task.spawn(function()
+                        while token == myToken do
+                                local root = Util.getRoot()
+                                local goalCf = resolveTargetCFrame(target)
+                                if root == nil or goalCf == nil then
+                                        break
+                                end
+                                if typeof(target) == "Instance" and target.Parent == nil then
+                                        break
+                                end
+                                pcall(function()
+                                        local desired = desiredCFrame(goalCf)
+                                        local errDist = (desired.Position - root.Position).Magnitude
+                                        if method == "Tween" then
+                                                if errDist > 1 then
+                                                        local drifted = tweenGoal == nil
+                                                                or (desired.Position - tweenGoal).Magnitude > RETARGET_DRIFT
+                                                        if activeTween == nil or drifted then
+                                                                startTweenTo(root, desired)
+                                                        end
+                                                else
+                                                        stopTween()
+                                                end
+                                        elseif errDist > SNAP_ERROR then
+                                                root.CFrame = desired
+                                        end
+                                end)
+                                task.wait(0.1)
+                        end
+                        loopAlive = false
+                        Tracker.setRunning("tffollow", false)
+                        stopTween()
+                end)
+                return true
+        end
+
+        function TargetFollow.IsRunning()
+                return loopAlive
+        end
+
+        function TargetFollow.getStatusText()
+                if loopAlive then
+                        local name = "target"
+                        if typeof(target) == "Instance" then
+                                name = target.Name
+                        end
+                        return "Following " .. name .. " - " .. position .. ", " .. distance .. " studs (" .. method .. ")"
+                end
+                return "Idle"
+        end
+end
 local MovementController = {}
 do
                 MovementController.walkSpeed = 16
@@ -3310,22 +3495,6 @@ do
                 end
         end
 
-        -- All automation travel routes through the shared MovementHandler (Instant or Tween only);
-        -- the owner tag keeps parallel engines from stopping each other's movement
-        function AutomationController.moveTo(targetModel, owner)
-                AutomationController.stopMovement(owner)
-                local ok = MovementHandler.follow(targetModel, owner)
-                if ok then
-                        Tracker.setRunning("automove", true)
-                end
-                return ok
-        end
-
-        function AutomationController.stopMovement(owner)
-                Tracker.setRunning("automove", false)
-                MovementHandler.stop(owner)
-        end
-
         -- Fires the nearest interaction prompt on a model (quest givers, crystals)
         function AutomationController.interactWith(model)
                 if model == nil then
@@ -3787,13 +3956,14 @@ do
                 return GameDetector.isGameReady()
         end
 
-        -- Spider Lilies spawn as named models directly under Workspace
+        -- Spider Lilies spawn as named models under Workspace/Debree (verified in the
+        -- instance: animated flower rigs, no prompt, no remote - touch collection)
         function SpiderLilyDetector.scan()
                 local lilies = {}
                 local wanted = (GameProfile.get("spiderLilies.workspaceName") or "Spider Lily"):lower()
                 pcall(function()
                         local function scanContainer(container, depth)
-                                if depth > 2 then
+                                if depth > 3 then
                                         return
                                 end
                                 for _, child in ipairs(container:GetChildren()) do
@@ -3886,6 +4056,52 @@ do
                 return tool
         end
 
+        local function targetPosition(target)
+                local ok, pos = pcall(function()
+                        if typeof(target) == "Instance" then
+                                if target:IsA("Model") then
+                                        return target:GetPivot().Position
+                                end
+                                if target.Position then
+                                        return target.Position
+                                end
+                                if target.CFrame then
+                                        return target.CFrame.Position
+                                end
+                                return nil
+                        end
+                        return target.Position
+                end)
+                if ok then
+                        return pos
+                end
+                return nil
+        end
+
+        -- Real combat input lands where the cursor points, so the camera and the
+        -- character must actually face the target before every swing
+        local function aimAt(target)
+                local root = Util.getRoot()
+                local pos = targetPosition(target)
+                if pos == nil then
+                        return
+                end
+                pcall(function()
+                        local camera = Workspace.CurrentCamera
+                        if camera then
+                                local eye = root and root.Position
+                                        or (camera.CFrame and camera.CFrame.Position)
+                                        or Vector3.new(0, 50, 0)
+                                camera.CFrame = CFrame.lookAt(eye, pos)
+                        end
+                end)
+                if root then
+                        pcall(function()
+                                root.CFrame = CFrame.lookAt(root.Position, Vector3.new(pos.X, root.Position.Y, pos.Z))
+                        end)
+                end
+        end
+
         local function swingMouse()
                 local camera = Workspace.CurrentCamera
                 local x, y = 960, 540
@@ -3903,7 +4119,7 @@ do
         end
 
         -- method "Melee" fights bare-handed (unequips so fists swing), "Sword" swings a tool.
-        -- Both use the game's real input path: tool Activate + a center-screen click.
+        -- Both use the game's real input path: aim at the target, tool Activate + center click.
         function CombatHandler.attack(target, method)
                 if target == nil then
                         return false
@@ -3916,6 +4132,7 @@ do
                         return false
                 end
                 lastSwing = now
+                aimAt(target)
                 if method ~= "Sword" then
                         -- Melee: fists, so nothing may stay equipped
                         local humanoid = Util.getHumanoid()
@@ -3932,7 +4149,7 @@ do
                         if not combatNotified then
                                 combatNotified = true
                                 Logger.warn("no weapon found in backpack - equip a weapon for combat")
-                                Util.notify("Combat", "No weapon found - equip one or pick it under Main > Targets")
+                                Util.notify("Combat", "No weapon found - equip one or pick it under Misc > Tools")
                         end
                         return false
                 end
@@ -3944,34 +4161,36 @@ do
         end
 end
 
-local AutoQuestController = {}
+-- Fully automatic leveling: accept a quest at its giver (one trip), farm the quest
+-- targets through TargetFollow + real combat, turn in, then move to the next quest.
+local AutoLevelController = {}
 do
-        AutoQuestController.STATUS_STATES = {
-                "Disabled",
-                "Searching for Quest",
-                "Quest Found",
-                "Quest Active",
-                "Completing Quest",
-                "No Suitable Quest Found",
+        AutoLevelController.STATUS_STATES = {
+                "Disabled", "Searching", "GoingToQuest", "AcceptingQuest", "QuestAccepted",
+                "FindingTarget", "FarmingTarget", "QuestComplete", "No Suitable Quest Found",
         }
-        AutoQuestController.settings = {
+        AutoLevelController.settings = {
                 enabled = false,
                 selectedQuest = "Auto Detect",
                 autoDetect = true,
                 autoAccept = true,
                 autoTurnIn = true,
+                autoAttack = true,
+                position = "Behind",
+                distance = 5,
+                method = "Instant",
         }
-        AutoQuestController.status = {
+        AutoLevelController.status = {
                 state = "Disabled",
                 quest = "None",
                 target = "None",
                 progress = "-",
                 healthPct = 0,
         }
-        AutoQuestController.currentTarget = nil
+        AutoLevelController.currentTarget = nil
 
         local function validState(state)
-                for _, known in ipairs(AutoQuestController.STATUS_STATES) do
+                for _, known in ipairs(AutoLevelController.STATUS_STATES) do
                         if known == state then
                                 return true
                         end
@@ -3979,20 +4198,20 @@ do
                 return false
         end
 
-        function AutoQuestController.setState(state)
+        function AutoLevelController.setState(state)
                 if validState(state) then
-                        AutoQuestController.status.state = state
+                        AutoLevelController.status.state = state
                 end
-                return AutoQuestController.status.state
+                return AutoLevelController.status.state
         end
 
-        function AutoQuestController.resetStatus()
-                AutoQuestController.status.state = "Disabled"
-                AutoQuestController.status.quest = "None"
-                AutoQuestController.status.target = "None"
-                AutoQuestController.status.progress = "-"
-                AutoQuestController.status.healthPct = 0
-                AutoQuestController.currentTarget = nil
+        function AutoLevelController.resetStatus()
+                AutoLevelController.status.state = "Disabled"
+                AutoLevelController.status.quest = "None"
+                AutoLevelController.status.target = "None"
+                AutoLevelController.status.progress = "-"
+                AutoLevelController.status.healthPct = 0
+                AutoLevelController.currentTarget = nil
         end
 
         local function questKeywords(quest)
@@ -4014,55 +4233,291 @@ do
                 return words
         end
 
-        -- Full cycle: accept at the giver, hunt the objective, turn in when the counters fill
-        local function autoQuestLoop()
-                local lastQuestName = nil
+        local function giverDistance(giver)
+                local root = Util.getRoot()
+                local giverRoot = nil
+                pcall(function()
+                        giverRoot = giver.model:FindFirstChild("HumanoidRootPart") or giver.model.PrimaryPart
+                end)
+                if root and giverRoot then
+                        return (giverRoot.Position - root.Position).Magnitude
+                end
+                return math.huge
+        end
+
+        local function autoLevelLoop()
+                local phase = nil            -- "accept" | "farm" | "turnin"
+                local giver = nil            -- locked giver for the current quest cycle
+                local acceptAttempts = 0
                 local lastNoticeAt = 0
-                while Tracker.isRunning("autoquest") do
+                local lastQuestName = nil
+                while Tracker.isRunning("autolevel") do
                         task.wait(math.max(AutomationController.settings.tickInterval, 0.25))
                         local quest = QuestDetector.getActiveQuest()
+
                         if quest == nil then
-                                -- Phase 1: no active quest -> travel to the nearest giver and accept
-                                AutoQuestController.setState("Searching for Quest")
-                                AutoQuestController.status.quest = "None"
-                                AutoQuestController.status.target = "None"
-                                AutoQuestController.status.progress = "-"
-                                AutoQuestController.currentTarget = nil
-                                if not AutoQuestController.settings.autoAccept then
-                                        AutomationController.stopMovement("autoquest")
-                                else
+                                -- no active quest: accept one, with a single trip to the giver
+                                if phase ~= "accept" then
+                                        phase = "accept"
+                                        giver = nil
+                                        acceptAttempts = 0
+                                        TargetFollow.Stop("autolevel")
+                                        AutoLevelController.currentTarget = nil
+                                        AutoLevelController.status.target = "None"
+                                        AutoLevelController.status.progress = "-"
+                                end
+                                if not AutoLevelController.settings.autoAccept then
+                                        AutoLevelController.setState("Searching")
+                                        AutoLevelController.status.quest = "None"
+                                        AutoLevelController.status.target = "Accept manually (auto accept is off)"
+                                elseif giver == nil or giver.model == nil or giver.model.Parent == nil then
                                         local givers = QuestDetector.findQuestGivers()
                                         if #givers == 0 then
-                                                AutoQuestController.setState("No Suitable Quest Found")
-                                                AutomationController.stopMovement("autoquest")
+                                                AutoLevelController.setState("No Suitable Quest Found")
+                                                AutoLevelController.status.quest = "None"
+                                                AutoLevelController.status.target = "No quest giver found"
                                         else
-                                                local giver = givers[1]
-                                                AutoQuestController.status.target = giver.name .. " (accepting)"
-                                                AutomationController.moveTo(giver.model, "autoquest")
-                                                local root = Util.getRoot()
-                                                local giverRoot = nil
-                                                pcall(function()
-                                                        giverRoot = giver.model:FindFirstChild("HumanoidRootPart") or giver.model.PrimaryPart
-                                                end)
-                                                local close = root and giverRoot
-                                                        and (giverRoot.Position - root.Position).Magnitude <= 12
-                                                if close then
-                                                        AutomationController.stopMovement("autoquest")
-                                                        local ok = AutomationController.tryDialogueAccept(giver.model)
-                                                        local now = os.clock()
-                                                        if not ok and now - lastNoticeAt > 15 then
-                                                                lastNoticeAt = now
-                                                                Util.notify("Auto Quest", "Dialogue opened at " .. giver.name .. " - accept manually if it needs you", 5)
-                                                        end
+                                                giver = givers[1]
+                                                acceptAttempts = 0
+                                                AutoLevelController.setState("GoingToQuest")
+                                                AutoLevelController.status.quest = "None"
+                                                AutoLevelController.status.target = giver.name .. " (going)"
+                                                -- one-shot travel: exactly one trip per quest cycle
+                                                MovementHandler.travelTo(giver.model)
+                                        end
+                                else
+                                        local dist = giverDistance(giver)
+                                        if dist <= 12 then
+                                                AutoLevelController.setState("AcceptingQuest")
+                                                AutoLevelController.status.target = giver.name .. " (accepting)"
+                                                acceptAttempts += 1
+                                                AutomationController.tryDialogueAccept(giver.model)
+                                                local now = os.clock()
+                                                if acceptAttempts > 8 and now - lastNoticeAt > 15 then
+                                                        lastNoticeAt = now
+                                                        Util.notify("Auto Level", "Dialogue at " .. giver.name .. " needs manual input", 5)
                                                 end
                                         end
                                 end
                         else
+                                -- quest is active: report it, then farm or turn in
+                                AutoLevelController.status.quest = quest.name
                                 if lastQuestName ~= quest.name then
                                         lastQuestName = quest.name
-                                        Util.notify("Auto Quest", "Quest active: " .. quest.name, 4)
+                                        phase = "farm"
+                                        giver = nil
+                                        TargetFollow.Stop("autolevel")
+                                        AutoLevelController.currentTarget = nil
+                                        AutoLevelController.setState("QuestAccepted")
+                                        Util.notify("Auto Level", "Quest active: " .. quest.name, 4)
                                 end
-                                AutoQuestController.setState("Quest Active")
+                                local done, needed = QuestDetector.getQuestProgress(quest)
+                                if done ~= nil then
+                                        AutoLevelController.status.progress = done .. "/" .. needed
+                                else
+                                        AutoLevelController.status.progress = "-"
+                                end
+
+                                if done ~= nil and needed > 0 and done >= needed then
+                                        -- counters full: turn the quest in, again a single trip
+                                        if phase ~= "turnin" then
+                                                phase = "turnin"
+                                                AutoLevelController.setState("QuestComplete")
+                                                AutoLevelController.status.target = "Turning in " .. quest.name
+                                                AutoLevelController.currentTarget = nil
+                                                TargetFollow.Stop("autolevel")
+                                                giver = nil
+                                                if AutoLevelController.settings.autoTurnIn then
+                                                        local givers = QuestDetector.findQuestGivers()
+                                                        if #givers > 0 then
+                                                                giver = givers[1]
+                                                                MovementHandler.travelTo(giver.model)
+                                                        end
+                                                end
+                                        end
+                                        if giver ~= nil and giver.model ~= nil and giver.model.Parent ~= nil and giverDistance(giver) <= 12 then
+                                                AutomationController.tryDialogueAccept(giver.model)
+                                        end
+                                        -- once the turn-in clears the Holder, the loop falls back to the accept phase
+                                else
+                                        -- farm the quest objective mobs
+                                        AutoLevelController.setState("FarmingTarget")
+                                        local matcher = AutomationController.makeKeywordMatcher(questKeywords(quest))
+                                        local mobs = AutomationController.scanMobModels(matcher)
+                                        local mob = mobs[1]
+                                        if mob == nil then
+                                                if AutoLevelController.currentTarget ~= nil then
+                                                        AutoLevelController.currentTarget = nil
+                                                        TargetFollow.Stop("autolevel")
+                                                end
+                                                AutoLevelController.setState("FindingTarget")
+                                                AutoLevelController.status.target = "No targets nearby"
+                                                AutoLevelController.status.healthPct = 0
+                                        else
+                                                -- follow continuously at the configured offset; attacks land via
+                                                -- the real input path while the offset is held
+                                                AutoLevelController.currentTarget = mob.model
+                                                TargetFollow.SetTarget(mob.model, {
+                                                        position = AutoLevelController.settings.position,
+                                                        distance = AutoLevelController.settings.distance,
+                                                        method = AutoLevelController.settings.method,
+                                                        owner = "autolevel",
+                                                })
+                                                TargetFollow.Start()
+                                                AutoLevelController.status.target = mob.name
+                                                AutoLevelController.status.healthPct = mob.healthPct
+                                                if AutoLevelController.settings.autoAttack then
+                                                        CombatHandler.attack(mob.model, CombatHandler.questMethod)
+                                                end
+                                        end
+                                end
+                        end
+                end
+        end
+
+        function AutoLevelController.setEnabled(enabled)
+                local want = enabled and true or false
+                if AutoLevelController.settings.enabled == want then
+                        return want
+                end
+                if enabled then
+                        if not GameDetector.requireGame("Auto Level") then
+                                return false
+                        end
+                        AutoLevelController.settings.enabled = true
+                        AutoLevelController.setState("Searching")
+                        Tracker.setRunning("autolevel", true)
+                        task.spawn(autoLevelLoop)
+                        return true
+                end
+                AutoLevelController.settings.enabled = false
+                Tracker.setRunning("autolevel", false)
+                TargetFollow.Stop("autolevel")
+                MovementHandler.stop()
+                AutoLevelController.resetStatus()
+                return true
+        end
+
+        function AutoLevelController.setQuest(name)
+                AutoLevelController.settings.selectedQuest = name or "Auto Detect"
+        end
+
+        function AutoLevelController.setAutoDetect(enabled)
+                AutoLevelController.settings.autoDetect = enabled and true or false
+        end
+
+        function AutoLevelController.setAutoAccept(enabled)
+                AutoLevelController.settings.autoAccept = enabled and true or false
+        end
+
+        function AutoLevelController.setAutoTurnIn(enabled)
+                AutoLevelController.settings.autoTurnIn = enabled and true or false
+        end
+
+        function AutoLevelController.setAutoAttack(enabled)
+                AutoLevelController.settings.autoAttack = enabled and true or false
+        end
+
+        -- per-feature positioning settings; the engine re-applies them to the shared
+        -- TargetFollow on every tick, so changes go live within a tick
+        function AutoLevelController.setPosition(pos)
+                for _, known in ipairs(TargetFollow.POSITIONS) do
+                        if known == pos then
+                                AutoLevelController.settings.position = known
+                        end
+                end
+                return AutoLevelController.settings.position
+        end
+
+        function AutoLevelController.setDistance(value)
+                AutoLevelController.settings.distance = math.clamp(value, 0, 100)
+                return AutoLevelController.settings.distance
+        end
+
+        function AutoLevelController.setMethod(method)
+                AutoLevelController.settings.method = (method == "Tween") and "Tween" or "Instant"
+                return AutoLevelController.settings.method
+        end
+
+        function AutoLevelController.getTargetModel()
+                return AutoLevelController.currentTarget
+        end
+
+        function AutoLevelController.getStatusText()
+                return AutoLevelController.status.state
+        end
+
+        function AutoLevelController.getQuestText()
+                return AutoLevelController.status.quest
+        end
+
+        function AutoLevelController.getTargetText()
+                return AutoLevelController.status.target
+        end
+
+        function AutoLevelController.getProgressText()
+                return AutoLevelController.status.progress
+        end
+
+        function AutoLevelController.getTargetHealthPct()
+                return AutoLevelController.status.healthPct or 0
+        end
+end
+
+-- Independent quest system: detects the available/selected quest, travels to its
+-- giver once, accepts and confirms it, then reports status. Hunting is Auto Level's
+-- job - this one only handles the quest paperwork.
+local AutoQuestController = {}
+do
+        AutoQuestController.STATUS_STATES = {
+                "Disabled", "Detecting Quest", "Going To Quest NPC", "Accepting Quest",
+                "Quest Accepted", "Quest Already Active", "No Suitable Quest Found",
+        }
+        AutoQuestController.settings = {
+                enabled = false,
+                selectedQuest = "Auto Detect",
+                autoDetect = true,
+        }
+        AutoQuestController.status = {
+                state = "Disabled",
+                quest = "None",
+                giver = "None",
+                progress = "-",
+        }
+
+        local function validState(state)
+                for _, known in ipairs(AutoQuestController.STATUS_STATES) do
+                        if known == state then
+                                return true
+                        end
+                end
+                return false
+        end
+
+        function AutoQuestController.setState(state)
+                if validState(state) then
+                        AutoQuestController.status.state = state
+                end
+                return AutoQuestController.status.state
+        end
+
+        function AutoQuestController.resetStatus()
+                AutoQuestController.status.state = "Disabled"
+                AutoQuestController.status.quest = "None"
+                AutoQuestController.status.giver = "None"
+                AutoQuestController.status.progress = "-"
+        end
+
+        local function autoQuestLoop()
+                local giver = nil
+                local attempts = 0
+                local lastNoticeAt = 0
+                local justAccepted = false
+                while Tracker.isRunning("autoquest") do
+                        task.wait(math.max(AutomationController.settings.tickInterval, 0.25))
+                        local quest = QuestDetector.getActiveQuest()
+                        if quest ~= nil then
+                                -- accepted (by us or earlier): confirm and report, no hunting here
                                 AutoQuestController.status.quest = quest.name
                                 local done, needed = QuestDetector.getQuestProgress(quest)
                                 if done ~= nil then
@@ -4070,46 +4525,45 @@ do
                                 else
                                         AutoQuestController.status.progress = "-"
                                 end
-                                if done ~= nil and needed > 0 and done >= needed then
-                                        -- Phase 3: counters full -> turn the quest back in at the giver
-                                        AutoQuestController.setState("Completing Quest")
-                                        AutoQuestController.status.target = "Turning in " .. quest.name
-                                        AutoQuestController.currentTarget = nil
-                                        AutomationController.stopMovement("autoquest")
-                                        if AutoQuestController.settings.autoTurnIn then
-                                                local givers = QuestDetector.findQuestGivers()
-                                                if #givers > 0 then
-                                                        local giver = givers[1]
-                                                        AutomationController.moveTo(giver.model, "autoquest")
-                                                        local root = Util.getRoot()
-                                                        local giverRoot = nil
-                                                        pcall(function()
-                                                                giverRoot = giver.model:FindFirstChild("HumanoidRootPart") or giver.model.PrimaryPart
-                                                        end)
-                                                        if root and giverRoot and (giverRoot.Position - root.Position).Magnitude <= 12 then
-                                                                AutomationController.stopMovement("autoquest")
-                                                                AutomationController.interactWith(giver.model)
-                                                                AutomationController.tryDialogueAccept(giver.model)
-                                                        end
-                                                end
+                                if justAccepted then
+                                        justAccepted = false
+                                        AutoQuestController.setState("Quest Accepted")
+                                        Util.notify("Auto Quest", "Quest accepted: " .. quest.name, 4)
+                                else
+                                        AutoQuestController.setState("Quest Already Active")
+                                end
+                                giver = nil
+                        else
+                                AutoQuestController.status.quest = "None"
+                                AutoQuestController.status.progress = "-"
+                                if giver == nil or giver.model == nil or giver.model.Parent == nil then
+                                        local givers = QuestDetector.findQuestGivers()
+                                        if #givers == 0 then
+                                                AutoQuestController.setState("No Suitable Quest Found")
+                                                AutoQuestController.status.giver = "None"
+                                        else
+                                                giver = givers[1]
+                                                attempts = 0
+                                                AutoQuestController.setState("Going To Quest NPC")
+                                                AutoQuestController.status.giver = giver.name
+                                                -- one trip to the giver, never a teleport loop
+                                                MovementHandler.travelTo(giver.model)
                                         end
                                 else
-                                        -- Phase 2: hunt the objective mobs
-                                        local matcher = AutomationController.makeKeywordMatcher(questKeywords(quest))
-                                        local mobs = AutomationController.scanMobModels(matcher)
-                                        if #mobs == 0 then
-                                                AutoQuestController.status.target = "No targets nearby"
-                                                AutoQuestController.status.healthPct = 0
-                                                AutoQuestController.currentTarget = nil
-                                                AutomationController.stopMovement("autoquest")
-                                        else
-                                                local mob = mobs[1]
-                                                AutoQuestController.currentTarget = mob.model
-                                                AutoQuestController.status.target = mob.name
-                                                AutoQuestController.status.healthPct = mob.healthPct
-                                                if AutomationController.settings.autoAttack then
-                                                        AutomationController.moveTo(mob.model, "autoquest")
-                                                        CombatHandler.attack(mob.model, CombatHandler.questMethod)
+                                        local root = Util.getRoot()
+                                        local giverRoot = nil
+                                        pcall(function()
+                                                giverRoot = giver.model:FindFirstChild("HumanoidRootPart") or giver.model.PrimaryPart
+                                        end)
+                                        if root and giverRoot and (giverRoot.Position - root.Position).Magnitude <= 12 then
+                                                AutoQuestController.setState("Accepting Quest")
+                                                attempts += 1
+                                                justAccepted = true
+                                                AutomationController.tryDialogueAccept(giver.model)
+                                                local now = os.clock()
+                                                if attempts > 8 and now - lastNoticeAt > 15 then
+                                                        lastNoticeAt = now
+                                                        Util.notify("Auto Quest", "Dialogue at " .. giver.name .. " needs manual input", 5)
                                                 end
                                         end
                                 end
@@ -4127,14 +4581,14 @@ do
                                 return false
                         end
                         AutoQuestController.settings.enabled = true
-                        AutoQuestController.setState("Searching for Quest")
+                        AutoQuestController.setState("Detecting Quest")
                         Tracker.setRunning("autoquest", true)
                         task.spawn(autoQuestLoop)
                         return true
                 end
                 AutoQuestController.settings.enabled = false
                 Tracker.setRunning("autoquest", false)
-                AutomationController.stopMovement("autoquest")
+                MovementHandler.stop()
                 AutoQuestController.resetStatus()
                 return true
         end
@@ -4147,18 +4601,6 @@ do
                 AutoQuestController.settings.autoDetect = enabled and true or false
         end
 
-        function AutoQuestController.setAutoAccept(enabled)
-                AutoQuestController.settings.autoAccept = enabled and true or false
-        end
-
-        function AutoQuestController.setAutoTurnIn(enabled)
-                AutoQuestController.settings.autoTurnIn = enabled and true or false
-        end
-
-        function AutoQuestController.getTargetModel()
-                return AutoQuestController.currentTarget
-        end
-
         function AutoQuestController.getStatusText()
                 return AutoQuestController.status.state
         end
@@ -4167,41 +4609,37 @@ do
                 return AutoQuestController.status.quest
         end
 
-        function AutoQuestController.getTargetText()
-                return AutoQuestController.status.target
+        function AutoQuestController.getGiverText()
+                return AutoQuestController.status.giver
         end
 
         function AutoQuestController.getProgressText()
                 return AutoQuestController.status.progress
         end
-
-        function AutoQuestController.getTargetHealthPct()
-                return AutoQuestController.status.healthPct or 0
-        end
 end
 
-local AutoDemonController = {}
+-- Standalone Spider Lily collector. The instance shows the flowers as animated rigs
+-- under Workspace/Debree with no prompt and no remote, so the pickup is a touch:
+-- TargetFollow keeps the player centered on the moving flower until it vanishes.
+local SpiderLilyController = {}
 do
-        AutoDemonController.STATUS_STATES = {
-                "Disabled",
-                "Detecting Spider Lilies",
-                "Collecting Spider Lily",
-                "No Spider Lilies Found",
+        SpiderLilyController.STATUS_STATES = {
+                "Disabled", "Finding Spider Lilies", "Collecting Spider Lily", "No Spider Lilies Found",
         }
-        AutoDemonController.settings = {
+        SpiderLilyController.settings = {
                 enabled = false,
-                autoCollect = true,
+                method = "Instant",
         }
-        AutoDemonController.status = {
+        SpiderLilyController.status = {
                 state = "Disabled",
                 currentLily = "None",
                 detection = "Idle",
                 collected = 0,
         }
-        AutoDemonController.currentTarget = nil
+        SpiderLilyController.currentTarget = nil
 
         local function validState(state)
-                for _, known in ipairs(AutoDemonController.STATUS_STATES) do
+                for _, known in ipairs(SpiderLilyController.STATUS_STATES) do
                         if known == state then
                                 return true
                         end
@@ -4209,124 +4647,142 @@ do
                 return false
         end
 
-        function AutoDemonController.setState(state)
+        function SpiderLilyController.setState(state)
                 if validState(state) then
-                        AutoDemonController.status.state = state
+                        SpiderLilyController.status.state = state
                 end
-                return AutoDemonController.status.state
+                return SpiderLilyController.status.state
         end
 
-        local function autoDemonLoop()
-                local collected = {}
-                while Tracker.isRunning("autodemon") do
-                        task.wait(1)
+        local function spiderLilyLoop()
+                local touching = nil          -- the lily we are currently sitting on
+                local touchingRoot = nil
+                while Tracker.isRunning("spiderlily") do
+                        task.wait(0.5)
+                        -- a flower we were touching vanished: only count it when we were
+                        -- actually on it (another player can snipe it from far away)
+                        if touching ~= nil and touching.Parent == nil then
+                                local root = Util.getRoot()
+                                local near = root ~= nil and touchingRoot ~= nil
+                                        and (touchingRoot.Position - root.Position).Magnitude <= 8
+                                if near then
+                                        SpiderLilyController.status.collected += 1
+                                        Util.notify("Spider Lily", "Collected - " .. SpiderLilyController.status.collected .. " total", 4)
+                                end
+                                touching = nil
+                                touchingRoot = nil
+                        end
+
                         local lilies = SpiderLilyDetector.scan()
                         if #lilies == 0 then
-                                AutoDemonController.status.detection = "Scanning"
-                                AutoDemonController.setState("No Spider Lilies Found")
-                                AutoDemonController.status.currentLily = "None"
-                                AutoDemonController.currentTarget = nil
-                                AutomationController.stopMovement("autodemon")
+                                SpiderLilyController.setState("No Spider Lilies Found")
+                                SpiderLilyController.status.detection = "Scanning - none on the map"
+                                SpiderLilyController.status.currentLily = "None"
+                                SpiderLilyController.currentTarget = nil
+                                TargetFollow.Stop("spiderlily")
+                                touching = nil
+                                touchingRoot = nil
                         else
                                 local lily = lilies[1]
-                                AutoDemonController.status.detection = "Found " .. #lilies
-                                AutoDemonController.setState("Collecting Spider Lily")
-                                AutoDemonController.status.currentLily = "Spider Lily (" .. Util.round(lily.dist, 0) .. " studs)"
-                                AutoDemonController.currentTarget = lily.model
-                                if AutoDemonController.settings.autoCollect then
-                                        AutomationController.moveTo(lily.model, "autodemon")
-                                        -- lilies expose no prompt in the replicated tree, so the
-                                        -- pickup is touch based: land exactly on the flower
-                                        local root = Util.getRoot()
-                                        if root and lily.root and (lily.root.Position - root.Position).Magnitude <= 6 then
-                                                AutomationController.stopMovement("autodemon")
-                                                MovementHandler.travelTo(lily.model)
-                                                AutomationController.interactWith(lily.model)
-                                                if lily.model.Parent == nil and not collected[lily.model] then
-                                                        collected[lily.model] = true
-                                                        AutoDemonController.status.collected += 1
-                                                end
-                                        end
+                                SpiderLilyController.status.detection = "Found " .. #lilies .. " on the map"
+                                SpiderLilyController.setState("Collecting Spider Lily")
+                                SpiderLilyController.status.currentLily = "Spider Lily (" .. Util.round(lily.dist, 0) .. " studs)"
+                                SpiderLilyController.currentTarget = lily.model
+                                -- centered on the flower itself with sustained contact; the
+                                -- follow recomputes every tick, so the animated flower cannot escape
+                                TargetFollow.SetTarget(lily.model, {
+                                        position = "Custom",
+                                        distance = 0,
+                                        method = SpiderLilyController.settings.method,
+                                        owner = "spiderlily",
+                                })
+                                TargetFollow.Start()
+                                if lily.model.Parent ~= nil then
+                                        touching = lily.model
+                                        touchingRoot = lily.root
                                 end
                         end
                 end
         end
 
-        function AutoDemonController.setEnabled(enabled)
+        function SpiderLilyController.setEnabled(enabled)
                 local want = enabled and true or false
-                if AutoDemonController.settings.enabled == want then
+                if SpiderLilyController.settings.enabled == want then
                         return want
                 end
                 if enabled then
-                        if not GameDetector.requireGame("Auto Demon") then
+                        if not GameDetector.requireGame("Auto Collect Spider Lily") then
                                 return false
                         end
-                        AutoDemonController.settings.enabled = true
-                        AutoDemonController.status.detection = "Detecting"
-                        AutoDemonController.setState("Detecting Spider Lilies")
-                        Tracker.setRunning("autodemon", true)
-                        task.spawn(autoDemonLoop)
+                        SpiderLilyController.settings.enabled = true
+                        SpiderLilyController.status.detection = "Detecting"
+                        SpiderLilyController.setState("Finding Spider Lilies")
+                        Tracker.setRunning("spiderlily", true)
+                        task.spawn(spiderLilyLoop)
                         return true
                 end
-                AutoDemonController.settings.enabled = false
-                Tracker.setRunning("autodemon", false)
-                AutomationController.stopMovement("autodemon")
-                AutoDemonController.setState("Disabled")
-                AutoDemonController.status.currentLily = "None"
-                AutoDemonController.status.detection = "Idle"
-                AutoDemonController.currentTarget = nil
+                SpiderLilyController.settings.enabled = false
+                Tracker.setRunning("spiderlily", false)
+                TargetFollow.Stop("spiderlily")
+                SpiderLilyController.setState("Disabled")
+                SpiderLilyController.status.currentLily = "None"
+                SpiderLilyController.status.detection = "Idle"
+                SpiderLilyController.currentTarget = nil
                 return true
         end
 
-        function AutoDemonController.setAutoCollect(enabled)
-                AutoDemonController.settings.autoCollect = enabled and true or false
+        function SpiderLilyController.setMethod(method)
+                SpiderLilyController.settings.method = (method == "Tween") and "Tween" or "Instant"
+                return SpiderLilyController.settings.method
         end
 
-        function AutoDemonController.getTargetModel()
-                return AutoDemonController.currentTarget
+        function SpiderLilyController.getTargetModel()
+                return SpiderLilyController.currentTarget
         end
 
-        function AutoDemonController.getStatusText()
-                return AutoDemonController.status.state
+        function SpiderLilyController.getStatusText()
+                return SpiderLilyController.status.state
         end
 
-        function AutoDemonController.getLilyText()
-                return AutoDemonController.status.currentLily
+        function SpiderLilyController.getLilyText()
+                return SpiderLilyController.status.currentLily
         end
 
-        function AutoDemonController.getDetectionText()
-                return AutoDemonController.status.detection
+        function SpiderLilyController.getDetectionText()
+                return SpiderLilyController.status.detection
         end
 
-        function AutoDemonController.getCollected()
-                return AutoDemonController.status.collected
+        function SpiderLilyController.getCollected()
+                return SpiderLilyController.status.collected
         end
 end
 
-local AutoBossController = {}
+-- Boss Farm: resolve the boss (selection or Auto-nearest), follow it through
+-- TargetFollow at the configured offset, attack until it is down, confirm the kill
+-- from the game's archive list, then move to the next boss.
+local BossFarmController = {}
 do
-        AutoBossController.STATUS_STATES = {
-                "Disabled",
-                "Detecting Boss",
-                "Boss Found",
-                "Attacking Boss",
-                "No Boss Found",
+        BossFarmController.STATUS_STATES = {
+                "Disabled", "Detecting Boss", "Following Boss", "Attacking Boss",
+                "Boss Down - Confirming Kill", "Boss Defeated", "No Boss Found",
         }
-        AutoBossController.settings = {
+        BossFarmController.settings = {
                 enabled = false,
                 selectedBoss = "Auto",
-                autoAttack = false,
-                detection = false,
+                autoAttack = true,
+                position = "Behind",
+                distance = 6,
+                method = "Instant",
         }
-        AutoBossController.status = {
+        BossFarmController.status = {
                 state = "Disabled",
                 currentBoss = "None",
                 healthPct = 0,
         }
-        AutoBossController.currentTarget = nil
+        BossFarmController.currentTarget = nil
 
         local function validState(state)
-                for _, known in ipairs(AutoBossController.STATUS_STATES) do
+                for _, known in ipairs(BossFarmController.STATUS_STATES) do
                         if known == state then
                                 return true
                         end
@@ -4334,144 +4790,215 @@ do
                 return false
         end
 
-        function AutoBossController.setState(state)
+        function BossFarmController.setState(state)
                 if validState(state) then
-                        AutoBossController.status.state = state
+                        BossFarmController.status.state = state
                 end
-                return AutoBossController.status.state
+                return BossFarmController.status.state
         end
 
-        function AutoBossController.resetStatus()
-                AutoBossController.status.state = "Disabled"
-                AutoBossController.status.currentBoss = "None"
-                AutoBossController.status.healthPct = 0
-                AutoBossController.currentTarget = nil
+        function BossFarmController.resetStatus()
+                BossFarmController.status.state = "Disabled"
+                BossFarmController.status.currentBoss = "None"
+                BossFarmController.status.healthPct = 0
+                BossFarmController.currentTarget = nil
         end
 
-        -- Resolves the boss to hunt: the selection, or every live BossInfo npc for Auto mode
-        local function resolveBossNames()
-                local selected = AutoBossController.settings.selectedBoss
+        -- Reads the live model, humanoid and health off a BossInfo registry folder
+        local function bossEntry(folder)
+                if folder == nil or folder.model == nil or folder.model.Parent == nil then
+                        return nil
+                end
+                local model = folder.model
+                local humanoid = nil
+                pcall(function()
+                        humanoid = model:FindFirstChildOfClass("Humanoid")
+                end)
+                local healthPct = 0
+                if humanoid and humanoid.MaxHealth > 0 then
+                        healthPct = humanoid.Health / humanoid.MaxHealth * 100
+                end
+                local dist = folder.dist
+                local root = nil
+                pcall(function()
+                        root = model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+                end)
+                if root ~= nil then
+                        dist = Util.distanceTo(root)
+                end
+                return { name = folder.name, model = model, humanoid = humanoid, root = root, dist = dist, healthPct = healthPct }
+        end
+
+        -- Selection first; Auto skips bosses the archive already credits us for
+        local function pickBossFolder(folders)
+                local selected = BossFarmController.settings.selectedBoss
                 if selected ~= "" and selected ~= "Auto" then
-                        return { selected }
+                        for _, folder in ipairs(folders) do
+                                if folder.name == selected then
+                                        return folder
+                                end
+                        end
+                        return nil
                 end
-                local names = {}
-                for _, folder in ipairs(BossDetector.scanBossFolders()) do
-                        table.insert(names, folder.name)
+                for _, folder in ipairs(folders) do
+                        if not BossDetector.isArchived(folder.name) then
+                                return folder
+                        end
                 end
-                return names
+                return folders[1]
         end
 
-        local function autoBossLoop()
-                local defeatedLogged = {}
-                while Tracker.isRunning("autoboss") do
+        local function bossFarmLoop()
+                local wasDown = {}
+                local defeatedNotified = {}
+                local lastBossName = nil
+                while Tracker.isRunning("bossfarm") do
                         task.wait(math.max(AutomationController.settings.tickInterval, 0.25))
-                        local bossNames = resolveBossNames()
-                        if #bossNames == 0 then
-                                AutoBossController.setState("No Boss Found")
-                                AutoBossController.status.currentBoss = "None"
-                                AutoBossController.status.healthPct = 0
-                                AutoBossController.currentTarget = nil
-                                AutomationController.stopMovement("autoboss")
-                        else
-                                local matcher = AutomationController.makeKeywordMatcher(bossNames)
-                                local mobs = AutomationController.scanMobModels(matcher)
-                                if #mobs == 0 then
-                                        -- no live model: the boss is not spawned right now, not dead
-                                        AutoBossController.setState("Detecting Boss")
-                                        AutoBossController.status.healthPct = 0
-                                        AutoBossController.currentTarget = nil
-                                        AutomationController.stopMovement("autoboss")
-                                        if AutoBossController.settings.selectedBoss ~= "" and AutoBossController.settings.selectedBoss ~= "Auto" then
-                                                AutoBossController.status.currentBoss = AutoBossController.settings.selectedBoss .. " (not spawned)"
+                        local folders = BossDetector.scanBossFolders()
+                        local chosen = pickBossFolder(folders)
+
+                        if chosen == nil then
+                                -- no live boss folder at all right now
+                                if lastBossName ~= nil and wasDown[lastBossName] then
+                                        -- we dropped one: the kill is only confirmed by the archive
+                                        if BossDetector.isArchived(lastBossName) then
+                                                BossFarmController.setState("Boss Defeated")
+                                                BossFarmController.status.currentBoss = lastBossName .. " (defeated - archived)"
+                                                if not defeatedNotified[lastBossName] then
+                                                        defeatedNotified[lastBossName] = true
+                                                        Util.notify("Boss Farm", lastBossName .. " defeated (confirmed by archive)", 4)
+                                                end
+                                                wasDown[lastBossName] = nil
+                                                lastBossName = nil
+                                        else
+                                                BossFarmController.setState("Boss Down - Confirming Kill")
+                                                BossFarmController.status.currentBoss = lastBossName .. " (waiting for archive)"
                                         end
                                 else
-                                        local boss = mobs[1]
-                                        local bossName = boss.name
-                                        -- kill is only confirmed by the game's own archive list
-                                        if BossDetector.isArchived(bossName) then
-                                                AutoBossController.setState("Boss Found")
-                                                AutoBossController.status.currentBoss = bossName .. " (defeated - archived)"
-                                                if not defeatedLogged[bossName] then
-                                                        defeatedLogged[bossName] = true
-                                                        Util.notify("Auto Boss", bossName .. " defeated (confirmed by archive)", 4)
-                                                end
-                                                AutomationController.stopMovement("autoboss")
-                                                AutoBossController.currentTarget = nil
+                                        BossFarmController.setState("No Boss Found")
+                                        local selected = BossFarmController.settings.selectedBoss
+                                        if selected ~= "" and selected ~= "Auto" then
+                                                BossFarmController.status.currentBoss = selected .. " (not spawned)"
                                         else
-                                                AutoBossController.currentTarget = boss.model
-                                                AutoBossController.setState("Attacking Boss")
-                                                AutoBossController.status.currentBoss = bossName
-                                                AutoBossController.status.healthPct = boss.healthPct
-                                                if boss.healthPct <= 0 and not defeatedLogged[bossName] then
-                                                        defeatedLogged[bossName] = true
-                                                        Util.notify("Auto Boss", bossName .. " is down - waiting for the kill to be archived", 4)
+                                                BossFarmController.status.currentBoss = "None"
+                                        end
+                                        BossFarmController.status.healthPct = 0
+                                        BossFarmController.currentTarget = nil
+                                        TargetFollow.Stop("bossfarm")
+                                end
+                        else
+                                local bossName = chosen.name
+                                lastBossName = bossName
+                                local entry = bossEntry(chosen)
+                                if entry == nil or entry.healthPct <= 0 then
+                                        -- dead or despawned: hold position and wait for the archive entry
+                                        wasDown[bossName] = true
+                                        BossFarmController.setState("Boss Down - Confirming Kill")
+                                        BossFarmController.status.currentBoss = bossName .. " (down - waiting for the kill to be archived)"
+                                        BossFarmController.status.healthPct = 0
+                                        BossFarmController.currentTarget = nil
+                                        TargetFollow.Stop("bossfarm")
+                                else
+                                        -- alive (a stale wasDown clears on respawn)
+                                        wasDown[bossName] = nil
+                                        BossFarmController.currentTarget = entry.model
+                                        BossFarmController.status.currentBoss = bossName
+                                        BossFarmController.status.healthPct = entry.healthPct
+                                        -- continuous follow at the configured offset; a moving
+                                        -- boss drags the offset with it instead of being teleported onto
+                                        TargetFollow.SetTarget(entry.model, {
+                                                position = BossFarmController.settings.position,
+                                                distance = BossFarmController.settings.distance,
+                                                method = BossFarmController.settings.method,
+                                                owner = "bossfarm",
+                                        })
+                                        TargetFollow.Start()
+                                        local inPosition = entry.dist <= BossFarmController.settings.distance + 6
+                                        if inPosition then
+                                                BossFarmController.setState("Attacking Boss")
+                                                if BossFarmController.settings.autoAttack then
+                                                        CombatHandler.attack(entry.model, CombatHandler.bossMethod)
                                                 end
-                                                if AutoBossController.settings.autoAttack then
-                                                        AutomationController.moveTo(boss.model, "autoboss")
-                                                        CombatHandler.attack(boss.model, CombatHandler.bossMethod)
-                                                end
+                                        else
+                                                BossFarmController.setState("Following Boss")
                                         end
                                 end
                         end
                 end
         end
 
-        function AutoBossController.setEnabled(enabled)
+        function BossFarmController.setEnabled(enabled)
                 local want = enabled and true or false
-                if AutoBossController.settings.enabled == want then
+                if BossFarmController.settings.enabled == want then
                         return want
                 end
                 if enabled then
-                        if not GameDetector.requireGame("Auto Boss") then
+                        if not GameDetector.requireGame("Boss Farm") then
                                 return false
                         end
-                        AutoBossController.settings.enabled = true
-                        AutoBossController.setState("Detecting Boss")
-                        Tracker.setRunning("autoboss", true)
-                        task.spawn(autoBossLoop)
+                        BossFarmController.settings.enabled = true
+                        BossFarmController.setState("Detecting Boss")
+                        Tracker.setRunning("bossfarm", true)
+                        task.spawn(bossFarmLoop)
                         return true
                 end
-                AutoBossController.settings.enabled = false
-                Tracker.setRunning("autoboss", false)
-                AutomationController.stopMovement("autoboss")
-                AutoBossController.resetStatus()
+                BossFarmController.settings.enabled = false
+                Tracker.setRunning("bossfarm", false)
+                TargetFollow.Stop("bossfarm")
+                MovementHandler.stop()
+                BossFarmController.resetStatus()
                 return true
         end
 
-        function AutoBossController.setBoss(name)
-                AutoBossController.settings.selectedBoss = name or "Auto"
+        function BossFarmController.setBoss(name)
+                BossFarmController.settings.selectedBoss = name or "Auto"
         end
 
-        function AutoBossController.setAutoAttack(enabled)
-                AutoBossController.settings.autoAttack = enabled and true or false
+        function BossFarmController.setAutoAttack(enabled)
+                BossFarmController.settings.autoAttack = enabled and true or false
         end
 
-        function AutoBossController.setDetection(enabled)
-                AutoBossController.settings.detection = enabled and true or false
+        function BossFarmController.setPosition(pos)
+                for _, known in ipairs(TargetFollow.POSITIONS) do
+                        if known == pos then
+                                BossFarmController.settings.position = known
+                        end
+                end
+                return BossFarmController.settings.position
         end
 
-        function AutoBossController.getBossOptions()
+        function BossFarmController.setDistance(value)
+                BossFarmController.settings.distance = math.clamp(value, 0, 100)
+                return BossFarmController.settings.distance
+        end
+
+        function BossFarmController.setMethod(method)
+                BossFarmController.settings.method = (method == "Tween") and "Tween" or "Instant"
+                return BossFarmController.settings.method
+        end
+
+        function BossFarmController.getBossOptions()
                 return BossDetector.getBossOptions()
         end
 
-        function AutoBossController.getTargetModel()
-                return AutoBossController.currentTarget
+        function BossFarmController.getTargetModel()
+                return BossFarmController.currentTarget
         end
 
-        function AutoBossController.getStatusText()
-                return AutoBossController.status.state
+        function BossFarmController.getStatusText()
+                return BossFarmController.status.state
         end
 
-        function AutoBossController.getBossText()
-                return AutoBossController.status.currentBoss
+        function BossFarmController.getBossText()
+                return BossFarmController.status.currentBoss
         end
 
-        function AutoBossController.getHealthPct()
-                return AutoBossController.status.healthPct or 0
+        function BossFarmController.getHealthPct()
+                return BossFarmController.status.healthPct or 0
         end
 
         -- Watches Archives/Bosses on the data slot; feeds the boss webhook on new kills
-        function AutoBossController.startArchiveWatch()
+        function BossFarmController.startArchiveWatch()
                 if Tracker.isRunning("bossarchive") then
                         return
                 end
@@ -4515,6 +5042,7 @@ do
                 enabled = false,
                 range = 12,
                 interval = 0.25,
+                method = "Melee",
         }
         KillAuraController.status = {
                 state = "Disabled",
@@ -4535,17 +5063,40 @@ do
                 return KillAuraController.currentTarget
         end
 
+        local function validMethod(method)
+                return method == "Melee" or method == "Sword"
+        end
+
+        function KillAuraController.setMethod(method)
+                if validMethod(method) then
+                        KillAuraController.settings.method = method
+                end
+                return KillAuraController.settings.method
+        end
+
+        local function targetDistance(target)
+                local myRoot = Util.getRoot()
+                local targetRoot = nil
+                pcall(function()
+                        targetRoot = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
+                end)
+                if myRoot == nil or targetRoot == nil then
+                        return nil
+                end
+                return (targetRoot.Position - myRoot.Position).Magnitude
+        end
+
         local function resolveTarget()
-                -- Provides the current Auto Quest target to Kill Aura, falling back to Auto Boss
-                local target = AutoQuestController.getTargetModel()
-                if target ~= nil then
+                -- dual data flow: the Auto Level quest target first, then the Boss Farm boss
+                local target = AutoLevelController.getTargetModel()
+                if target ~= nil and target.Parent ~= nil then
                         return target, CombatHandler.questMethod
                 end
-                target = AutoBossController.getTargetModel()
-                if target ~= nil then
+                target = BossFarmController.getTargetModel()
+                if target ~= nil and target.Parent ~= nil then
                         return target, CombatHandler.bossMethod
                 end
-                return nil, CombatHandler.questMethod
+                return nil, KillAuraController.settings.method
         end
 
         local function killAuraLoop()
@@ -4559,24 +5110,19 @@ do
                                 for _, mob in ipairs(mobs) do
                                         if mob.dist <= KillAuraController.settings.range then
                                                 target = mob.model
+                                                method = KillAuraController.settings.method
                                                 break
                                         end
                                 end
                         end
                         if target ~= nil and target.Parent ~= nil then
-                                KillAuraController.setCurrentTarget(target)
-                                local targetRoot = nil
-                                pcall(function()
-                                        targetRoot = target:FindFirstChild("HumanoidRootPart") or target.PrimaryPart
-                                end)
-                                local myRoot = Util.getRoot()
-                                if targetRoot and myRoot then
-                                        local distance = (targetRoot.Position - myRoot.Position).Magnitude
-                                        if distance <= KillAuraController.settings.range then
-                                                CombatHandler.attack(target, method)
-                                        end
-                                else
+                                -- live range check, not the stale scan distance
+                                local distance = targetDistance(target)
+                                if distance == nil or distance <= KillAuraController.settings.range then
+                                        KillAuraController.setCurrentTarget(target)
                                         CombatHandler.attack(target, method)
+                                else
+                                        KillAuraController.setCurrentTarget(nil)
                                 end
                         end
                 end
@@ -4625,7 +5171,7 @@ end
 
 -- Boss archive watch arms as soon as the game structure is detected
 GameProfile.onLoad(function()
-        AutoBossController.startArchiveWatch()
+        BossFarmController.startArchiveWatch()
 end)
 
 local DiscoveryController = {}
@@ -5186,11 +5732,13 @@ do
                 -- New loop-backed features must be registered here or emergency stop will miss them
                 function SettingsController.emergencyStop()
                                 local ok = pcall(function()
+                                                AutoLevelController.setEnabled(false)
                                                 AutoQuestController.setEnabled(false)
-                                                AutoDemonController.setEnabled(false)
-                                                AutoBossController.setEnabled(false)
+                                                SpiderLilyController.setEnabled(false)
+                                                BossFarmController.setEnabled(false)
                                                 KillAuraController.setEnabled(false)
                                                 MovementHandler.stop()
+                                                TargetFollow.Stop()
                                                 TeleportController.setAutoRefresh(false)
                                                 ClanController.setEnabled(false)
                                                 MovementController.setFly(false)
@@ -5297,7 +5845,7 @@ pcall(function()
         Window:CreateSection({ name = "General" })
 end)
 local HomeTab = Window:CreateTab({ name = "Home" })
-local UniversalTab = Window:CreateTab({ name = "Universal" })
+local MiscTab = Window:CreateTab({ name = "Misc" })
 local EspTab = Window:CreateTab({ name = "ESP" })
 local ServerTab = Window:CreateTab({ name = "Server" })
 pcall(function()
@@ -5386,7 +5934,7 @@ local function syncAllOff()
         local keys = {
                 "flyToggle", "noclipToggle", "infjumpToggle", "sprintToggle", "lockstatsToggle",
                 "clicktpToggle", "godToggle", "antiafkToggle", "followToggle", "autoequipToggle",
-                "autoQuestToggle", "autoDemonToggle", "autoBossToggle", "killAuraToggle", "teleportAutoRefresh", "clanToggle", "espPlayersToggle", "espNpcsToggle",
+                "autoLevelToggle", "autoQuestToggle", "spiderLilyToggle", "bossFarmToggle", "killAuraToggle", "teleportAutoRefresh", "clanToggle", "espPlayersToggle", "espNpcsToggle",
                 "espBossesToggle", "espQuestToggle", "espItemsToggle", "fullbrightToggle",
         }
         for _, key in ipairs(keys) do
@@ -5447,7 +5995,7 @@ buildTab("Home", function()
         local function countActive()
                 local activeModules = 0
                 local names = {
-                        "autoquest", "autodemon", "autoboss", "killaura", "clan", "fly", "noclip",
+                        "autolevel", "autoquest", "spiderlily", "bossfarm", "killaura", "clan", "fly", "noclip",
                         "infjump", "god", "antiafk", "sprint", "npcscan", "espplayers", "lockstats",
                         "follow", "clicktp", "autoperf",
                 }
@@ -5470,15 +6018,17 @@ buildTab("Home", function()
                                 gameName = GameDetector.detect().gameName or "?"
                         end)
                         local taskLine = "Idle - automation off"
-                        if Tracker.isRunning("autoquest") then
-                                taskLine = "Auto Quest: " .. AutoQuestController.getStatusText()
-                                if AutoQuestController.getQuestText() ~= "None" then
-                                        taskLine = taskLine .. " - " .. AutoQuestController.getQuestText()
+                        if Tracker.isRunning("autolevel") then
+                                taskLine = "Auto Level: " .. AutoLevelController.getStatusText()
+                                if AutoLevelController.getQuestText() ~= "None" then
+                                        taskLine = taskLine .. " - " .. AutoLevelController.getQuestText()
                                 end
-                        elseif Tracker.isRunning("autodemon") then
-                                taskLine = "Auto Demon: " .. AutoDemonController.getStatusText()
-                        elseif Tracker.isRunning("autoboss") then
-                                taskLine = "Auto Boss: " .. AutoBossController.getBossText()
+                        elseif Tracker.isRunning("autoquest") then
+                                taskLine = "Auto Quest: " .. AutoQuestController.getStatusText()
+                        elseif Tracker.isRunning("spiderlily") then
+                                taskLine = "Spider Lily: " .. SpiderLilyController.getStatusText()
+                        elseif Tracker.isRunning("bossfarm") then
+                                taskLine = "Boss Farm: " .. BossFarmController.getBossText()
                         elseif Tracker.isRunning("clan") then
                                 taskLine = "Auto Spin Clan active - " .. tostring(ClanController.sessionRerolls) .. " spin(s)"
                         end
@@ -5492,9 +6042,9 @@ buildTab("Home", function()
                                 Elements.statModules:Set(countActive())
                                 Elements.statUptime:Set(math.floor(os.clock() - bootTime))
                                 Elements.homeTask:Set(taskLine)
-                                local targetHealth = AutoBossController.getHealthPct()
+                                local targetHealth = BossFarmController.getHealthPct()
                                 if targetHealth <= 0 then
-                                        targetHealth = AutoQuestController.getTargetHealthPct()
+                                        targetHealth = AutoLevelController.getTargetHealthPct()
                                 end
                                 Elements.homeProgress:Set(math.floor(targetHealth))
                         end)
@@ -5504,7 +6054,7 @@ buildTab("Home", function()
         HomeTab:CreateSection({ name = "Game Support" })
         HomeTab:CreateText({
                 name = "Project Slayers 2",
-                text = "Auto Quest, Auto Demon, Auto Boss, Kill Aura, Teleports and Auto Spin Clan are built from the analyzed Project Slayers 2 instance and only run inside that game. Universal features work everywhere.",
+                text = "Auto Level, Auto Quest, Boss Farm, Kill Aura, Auto Collect Spider Lily, Teleports and Auto Spin Clan are built from the analyzed Project Slayers 2 instance and only run inside that game. Universal features work everywhere.",
         })
         HomeTab:CreateButton({
                 name = "Check for Updates",
@@ -5514,10 +6064,10 @@ buildTab("Home", function()
         })
 end)
 
-buildTab("Universal", function()
-        UniversalTab:CreateSection({ name = "Movement" })
+buildTab("Misc", function()
+        MiscTab:CreateSection({ name = "Movement" })
 
-        local toggleRowA = UniversalTab:CreateGroup()
+        local toggleRowA = MiscTab:CreateGroup()
         local lockstatsToggle
         lockstatsToggle = toggleRowA:CreateToggle({
                 name = "Lock Stats",
@@ -5553,7 +6103,7 @@ buildTab("Universal", function()
         })
         Elements.noclipToggle = noclipToggle
 
-        local toggleRowB = UniversalTab:CreateGroup()
+        local toggleRowB = MiscTab:CreateGroup()
         local clicktpToggle
         clicktpToggle = toggleRowB:CreateToggle({
                 name = "Click Teleport",
@@ -5587,7 +6137,7 @@ buildTab("Universal", function()
         })
         Elements.sprintToggle = sprintToggle
 
-        local sliderRowA = UniversalTab:CreateGroup()
+        local sliderRowA = MiscTab:CreateGroup()
         sliderRowA:CreateSlider({
                 name = "Walk Speed",
                 range = { 16, 300 },
@@ -5611,7 +6161,7 @@ buildTab("Universal", function()
                 end,
         })
 
-        local sliderRowB = UniversalTab:CreateGroup()
+        local sliderRowB = MiscTab:CreateGroup()
         sliderRowB:CreateSlider({
                 name = "Jump Height",
                 range = { 1, 100 },
@@ -5635,7 +6185,7 @@ buildTab("Universal", function()
                 end,
         })
 
-        local sliderRowC = UniversalTab:CreateGroup()
+        local sliderRowC = MiscTab:CreateGroup()
         sliderRowC:CreateSlider({
                 name = "Sprint Speed",
                 range = { 17, 300 },
@@ -5659,7 +6209,7 @@ buildTab("Universal", function()
                 end,
         })
 
-        UniversalTab:CreateDropdown({
+        MiscTab:CreateDropdown({
                 name = "Fly Method",
                 options = { "WASD", "Camera (mobile)" },
                 value = "WASD",
@@ -5668,7 +6218,7 @@ buildTab("Universal", function()
                         MovementController.setFlyMethod(normalizeChoice(option))
                 end,
         })
-        UniversalTab:CreateDropdown({
+        MiscTab:CreateDropdown({
                 name = "Jump Mode",
                 options = { "Auto", "Power", "Height" },
                 value = "Auto",
@@ -5679,7 +6229,7 @@ buildTab("Universal", function()
                 end,
         })
 
-        UniversalTab:CreateKeybind({
+        MiscTab:CreateKeybind({
                 name = "Fly Key",
                 description = "Toggles fly - WASD to move, Space/LeftControl for vertical",
                 value = Enum.KeyCode.F,
@@ -5693,7 +6243,7 @@ buildTab("Universal", function()
                         safeSet(flyToggle, newValue)
                 end,
         })
-        UniversalTab:CreateKeybind({
+        MiscTab:CreateKeybind({
                 name = "Noclip Key",
                 value = Enum.KeyCode.N,
                 flag = "Univ_NoclipKey",
@@ -5703,7 +6253,7 @@ buildTab("Universal", function()
                         safeSet(noclipToggle, newValue)
                 end,
         })
-        UniversalTab:CreateKeybind({
+        MiscTab:CreateKeybind({
                 name = "Sprint Key",
                 value = MovementController.sprintKey,
                 flag = "Univ_SprintKey",
@@ -5721,9 +6271,9 @@ buildTab("Universal", function()
                 end,
         })
 
-        UniversalTab:CreateSection({ name = "Character & Camera" })
+        MiscTab:CreateSection({ name = "Character & Camera" })
 
-        local charRow = UniversalTab:CreateGroup()
+        local charRow = MiscTab:CreateGroup()
         local godToggle
         godToggle = charRow:CreateToggle({
                 name = "God Mode",
@@ -5747,23 +6297,17 @@ buildTab("Universal", function()
         })
         Elements.antiafkToggle = antiafkToggle
 
-        local utilRow = UniversalTab:CreateGroup()
+        local utilRow = MiscTab:CreateGroup()
         utilRow:CreateButton({
                 name = "Reset Character",
                 callback = function()
                         CharacterController.reset()
                 end,
         })
-        utilRow:CreateButton({
-                name = "Reset FOV",
-                callback = function()
-                        CharacterController.resetFov()
-                end,
-        })
 
-        UniversalTab:CreateSection({ name = "Players" })
+        MiscTab:CreateSection({ name = "Players" })
 
-        local playerDropdown = UniversalTab:CreateDropdown({
+        local playerDropdown = MiscTab:CreateDropdown({
                 name = "Select Player",
                 options = PlayerController.getPlayerNames(),
                 placeholder = "None",
@@ -5779,7 +6323,7 @@ buildTab("Universal", function()
                 end)
         end)
 
-        local tpRow = UniversalTab:CreateGroup()
+        local tpRow = MiscTab:CreateGroup()
         tpRow:CreateButton({
                 name = "Teleport To",
                 callback = function()
@@ -5799,7 +6343,7 @@ buildTab("Universal", function()
                 end,
         })
 
-        local viewRow = UniversalTab:CreateGroup()
+        local viewRow = MiscTab:CreateGroup()
         viewRow:CreateButton({
                 name = "Spectate",
                 callback = function()
@@ -5812,17 +6356,9 @@ buildTab("Universal", function()
                         PlayerController.stopSpectate()
                 end,
         })
-        viewRow:CreateButton({
-                name = "Refresh List",
-                callback = function()
-                        pcall(function()
-                                playerDropdown:Refresh(PlayerController.getPlayerNames())
-                        end)
-                end,
-        })
 
         local followToggle
-        followToggle = UniversalTab:CreateToggle({
+        followToggle = MiscTab:CreateToggle({
                 name = "Follow Selected Player",
                 value = false,
                 flag = "Univ_Follow",
@@ -5832,9 +6368,9 @@ buildTab("Universal", function()
         })
         Elements.followToggle = followToggle
 
-        UniversalTab:CreateSection({ name = "Tools" })
+        MiscTab:CreateSection({ name = "Tools" })
 
-        local toolDropdown = UniversalTab:CreateDropdown({
+        local toolDropdown = MiscTab:CreateDropdown({
                 name = "Select Tool",
                 options = ToolController.getToolNames(),
                 placeholder = "None",
@@ -5849,7 +6385,7 @@ buildTab("Universal", function()
                         toolDropdown:Refresh(ToolController.getToolNames())
                 end)
         end)
-        local toolRow = UniversalTab:CreateGroup()
+        local toolRow = MiscTab:CreateGroup()
         toolRow:CreateButton({
                 name = "Equip Selected Tool",
                 callback = function()
@@ -5863,7 +6399,7 @@ buildTab("Universal", function()
                 end,
         })
         local autoequipToggle
-        autoequipToggle = UniversalTab:CreateToggle({
+        autoequipToggle = MiscTab:CreateToggle({
                 name = "Auto Re-equip on Respawn",
                 value = false,
                 flag = "Univ_AutoEquip",
@@ -5875,28 +6411,28 @@ buildTab("Universal", function()
 end)
 
 buildTab("Main", function()
-        MainTab:CreateSection({ name = "Auto Quest" })
+        MainTab:CreateSection({ name = "Auto Level" })
         MainTab:CreateText({
                 name = "Locked",
-                text = "Auto Quest reads your active quest from the game and hunts its targets. Auto Demon collects Spider Lilies from the map. Auto Boss hunts bosses (boss NPCs carry a BossInfo marker). Kill Aura swings your weapon at quest and boss targets inside its range. All of it only works inside Project Slayers 2.",
+                text = "Auto Level accepts your quest at its giver, follows the quest targets at your chosen offset and attacks them, then turns the quest in and repeats. Auto Quest only handles accepting a selected quest. Boss Farm hunts bosses with the same positioning system. Kill Aura attacks quest and boss targets inside its range. All of it only works inside Project Slayers 2.",
         })
-        local autoQuestToggle
-        autoQuestToggle = MainTab:CreateToggle({
-                name = "Auto Quest",
-                description = "Follows your active quest, hunts its targets, then returns to the giver to turn it in",
+        local autoLevelToggle
+        autoLevelToggle = MainTab:CreateToggle({
+                name = "Auto Level",
+                description = "Fully automatic leveling: accept, hunt, turn in, next quest",
                 value = false,
-                flag = "QuestEnable",
+                flag = "LevelEnable",
                 callback = function(value)
-                        local ok = AutoQuestController.setEnabled(value)
+                        local ok = AutoLevelController.setEnabled(value)
                         if value and not ok then
-                                safeSet(autoQuestToggle, false)
+                                safeSet(autoLevelToggle, false)
                         end
                 end,
         })
-        Elements.autoQuestToggle = autoQuestToggle
-        lockUntilRelease(autoQuestToggle)
-        if autoQuestToggle.value and not GameDetector.isGameReady() then
-                safeSet(autoQuestToggle, false)
+        Elements.autoLevelToggle = autoLevelToggle
+        lockUntilRelease(autoLevelToggle)
+        if autoLevelToggle.value and not GameDetector.isGameReady() then
+                safeSet(autoLevelToggle, false)
         end
         local questDropdown
         questDropdown = MainTab:CreateDropdown({
@@ -5904,10 +6440,10 @@ buildTab("Main", function()
                 options = { "Auto Detect" },
                 value = "Auto Detect",
                 placeholder = "Auto Detect",
-                description = "Auto Detect follows your active quest; picking one is informational",
+                description = "Auto Detect follows the quest that fits your level",
                 forgetState = true,
                 callback = function(option)
-                        AutoQuestController.setQuest(normalizeChoice(option))
+                        AutoLevelController.setQuest(normalizeChoice(option))
                 end,
         })
         local questRow = MainTab:CreateGroup()
@@ -5918,7 +6454,7 @@ buildTab("Main", function()
                 value = true,
                 flag = "QuestAutoDetect",
                 callback = function(value)
-                        AutoQuestController.setAutoDetect(value)
+                        AutoLevelController.setAutoDetect(value)
                 end,
         })
         Elements.questDetectToggle = questDetectToggle
@@ -5928,7 +6464,7 @@ buildTab("Main", function()
                 value = true,
                 flag = "QuestAutoAccept",
                 callback = function(value)
-                        AutoQuestController.setAutoAccept(value)
+                        AutoLevelController.setAutoAccept(value)
                 end,
         })
         Elements.autoAcceptToggle = autoAcceptToggle
@@ -5938,16 +6474,58 @@ buildTab("Main", function()
                 value = true,
                 flag = "QuestAutoTurnIn",
                 callback = function(value)
-                        AutoQuestController.setAutoTurnIn(value)
+                        AutoLevelController.setAutoTurnIn(value)
                 end,
         })
         Elements.autoTurnInToggle = autoTurnInToggle
-        Elements.questBlock = MainTab:CreateText({
+        local levelCombatRow = MainTab:CreateGroup()
+        levelCombatRow:CreateToggle({
+                name = "Auto Attack",
+                description = "Swings at the quest target while following it",
+                value = true,
+                flag = "LevelAutoAttack",
+                callback = function(value)
+                        AutoLevelController.setAutoAttack(value)
+                end,
+        })
+        MainTab:CreateDropdown({
+                name = "Target Position",
+                options = TargetFollow.POSITIONS,
+                value = "Behind",
+                description = "Where you stand relative to the target - offset follows the target as it moves",
+                flag = "LevelTargetPosition",
+                callback = function(option)
+                        AutoLevelController.setPosition(normalizeChoice(option))
+                end,
+        })
+        local levelDistanceRow = MainTab:CreateGroup()
+        levelDistanceRow:CreateSlider({
+                name = "Target Distance",
+                range = { 0, 40 },
+                increment = 1,
+                suffix = " studs",
+                value = 5,
+                flag = "LevelTargetDistance",
+                callback = function(value)
+                        AutoLevelController.setDistance(value)
+                end,
+        })
+        MainTab:CreateDropdown({
+                name = "Movement Method",
+                options = { "Instant", "Tween" },
+                value = "Instant",
+                description = "Instant snaps to the offset when it drifts; Tween glides. Never walks.",
+                flag = "LevelMoveMethod",
+                callback = function(option)
+                        AutoLevelController.setMethod(normalizeChoice(option))
+                end,
+        })
+        Elements.levelBlock = MainTab:CreateText({
                 name = "Quest Status",
-                text = "State: " .. AutoQuestController.getStatusText()
-                        .. "\nQuest: " .. AutoQuestController.getQuestText()
-                        .. "\nTarget: " .. AutoQuestController.getTargetText()
-                        .. "\nProgress: " .. AutoQuestController.getProgressText(),
+                text = "State: " .. AutoLevelController.getStatusText()
+                        .. "\nQuest: " .. AutoLevelController.getQuestText()
+                        .. "\nTarget: " .. AutoLevelController.getTargetText()
+                        .. "\nProgress: " .. AutoLevelController.getProgressText(),
         })
         local questActionRow = MainTab:CreateGroup()
         local refreshQuestsButton
@@ -5964,7 +6542,7 @@ buildTab("Main", function()
                         pcall(function()
                                 questDropdown:Refresh(options)
                         end)
-                        Util.notify("Auto Quest", #options - 1 .. " quest(s) loaded")
+                        Util.notify("Auto Level", #options - 1 .. " quest(s) loaded")
                 end,
         })
         lockUntilRelease(refreshQuestsButton)
@@ -5978,99 +6556,169 @@ buildTab("Main", function()
                 end,
         })
 
-        MainTab:CreateSection({ name = "Auto Demon" })
-        local autoDemonToggle
-        autoDemonToggle = MainTab:CreateToggle({
-                name = "Auto Demon",
-                description = "Finds every Spider Lily and collects it",
+        MainTab:CreateSection({ name = "Auto Quest" })
+        MainTab:CreateText({
+                name = "Independent Quest System",
+                text = "Accepts a quest without hunting it: goes to the giver once, accepts the dialogue, confirms it landed and reports progress. Hunting is Auto Level's job.",
+        })
+        local autoQuestToggle
+        autoQuestToggle = MainTab:CreateToggle({
+                name = "Auto Quest",
+                description = "Detects the available quest, travels to its giver, accepts and confirms",
                 value = false,
-                flag = "DemonEnable",
+                flag = "QuestSystemEnable",
                 callback = function(value)
-                        local ok = AutoDemonController.setEnabled(value)
+                        local ok = AutoQuestController.setEnabled(value)
                         if value and not ok then
-                                safeSet(autoDemonToggle, false)
+                                safeSet(autoQuestToggle, false)
                         end
                 end,
         })
-        Elements.autoDemonToggle = autoDemonToggle
-        lockUntilRelease(autoDemonToggle)
-        if autoDemonToggle.value and not GameDetector.isGameReady() then
-                safeSet(autoDemonToggle, false)
+        Elements.autoQuestToggle = autoQuestToggle
+        lockUntilRelease(autoQuestToggle)
+        if autoQuestToggle.value and not GameDetector.isGameReady() then
+                safeSet(autoQuestToggle, false)
         end
-        local collectToggle
-        collectToggle = MainTab:CreateToggle({
-                name = "Auto Collect Spider Lilies",
-                value = true,
-                flag = "DemonCollectLilies",
-                callback = function(value)
-                        AutoDemonController.setAutoCollect(value)
+        local questSystemDropdown
+        questSystemDropdown = MainTab:CreateDropdown({
+                name = "Quest Selection",
+                options = { "Auto Detect" },
+                value = "Auto Detect",
+                placeholder = "Auto Detect",
+                description = "Auto Detect uses the nearest quest giver",
+                forgetState = true,
+                callback = function(option)
+                        AutoQuestController.setQuest(normalizeChoice(option))
                 end,
         })
-        Elements.collectToggle = collectToggle
-        Elements.demonBlock = MainTab:CreateText({
-                name = "Spider Lily Status",
-                text = "State: " .. AutoDemonController.getStatusText()
-                        .. "\nCurrent: " .. AutoDemonController.getLilyText()
-                        .. "\nDetection: " .. AutoDemonController.getDetectionText(),
+        Elements.questSystemBlock = MainTab:CreateText({
+                name = "Quest System Status",
+                text = "State: " .. AutoQuestController.getStatusText()
+                        .. "\nQuest: " .. AutoQuestController.getQuestText()
+                        .. "\nGiver: " .. AutoQuestController.getGiverText()
+                        .. "\nProgress: " .. AutoQuestController.getProgressText(),
         })
-        local demonStatRow = MainTab:CreateGroup()
-        Elements.statLilies = demonStatRow:CreateStat({ name = "Spider Lilies Collected", value = 0 })
 
-        MainTab:CreateSection({ name = "Auto Boss" })
-        local autoBossToggle
-        autoBossToggle = MainTab:CreateToggle({
-                name = "Auto Boss",
-                description = "Fights the selected boss automatically",
+        MainTab:CreateSection({ name = "Auto Collect Spider Lily" })
+        MainTab:CreateText({
+                name = "Touch Collection",
+                text = "Spider Lilies are animated flowers with no prompt or remote - collection is by touch. The collector stays centered on the moving flower until it vanishes, then moves to the next one.",
+        })
+        local spiderLilyToggle
+        spiderLilyToggle = MainTab:CreateToggle({
+                name = "Auto Collect Spider Lilies",
+                description = "Finds every Spider Lily on the map and collects it",
+                value = false,
+                flag = "SpiderLilyEnable",
+                callback = function(value)
+                        local ok = SpiderLilyController.setEnabled(value)
+                        if value and not ok then
+                                safeSet(spiderLilyToggle, false)
+                        end
+                end,
+        })
+        Elements.spiderLilyToggle = spiderLilyToggle
+        lockUntilRelease(spiderLilyToggle)
+        if spiderLilyToggle.value and not GameDetector.isGameReady() then
+                safeSet(spiderLilyToggle, false)
+        end
+        MainTab:CreateDropdown({
+                name = "Movement Method",
+                options = { "Instant", "Tween" },
+                value = "Instant",
+                description = "How the collector travels between flowers",
+                flag = "SpiderLilyMoveMethod",
+                callback = function(option)
+                        SpiderLilyController.setMethod(normalizeChoice(option))
+                end,
+        })
+        Elements.lilyBlock = MainTab:CreateText({
+                name = "Spider Lily Status",
+                text = "State: " .. SpiderLilyController.getStatusText()
+                        .. "\nCurrent: " .. SpiderLilyController.getLilyText()
+                        .. "\nDetection: " .. SpiderLilyController.getDetectionText(),
+        })
+        local lilyStatRow = MainTab:CreateGroup()
+        Elements.statLilies = lilyStatRow:CreateStat({ name = "Spider Lilies Collected", value = 0 })
+
+        MainTab:CreateSection({ name = "Boss Farm" })
+        local bossFarmToggle
+        bossFarmToggle = MainTab:CreateToggle({
+                name = "Boss Farm",
+                description = "Follows the selected boss at your offset, attacks it, confirms the kill from the game archive, then finds the next",
                 value = false,
                 flag = "BossEnable",
                 callback = function(value)
-                        local ok = AutoBossController.setEnabled(value)
+                        local ok = BossFarmController.setEnabled(value)
                         if value and not ok then
-                                safeSet(autoBossToggle, false)
+                                safeSet(bossFarmToggle, false)
                         end
                 end,
         })
-        Elements.autoBossToggle = autoBossToggle
-        lockUntilRelease(autoBossToggle)
-        if autoBossToggle.value and not GameDetector.isGameReady() then
-                safeSet(autoBossToggle, false)
+        Elements.bossFarmToggle = bossFarmToggle
+        lockUntilRelease(bossFarmToggle)
+        if bossFarmToggle.value and not GameDetector.isGameReady() then
+                safeSet(bossFarmToggle, false)
         end
         local bossDropdown
         bossDropdown = MainTab:CreateDropdown({
                 name = "Boss Selection",
                 options = {},
                 placeholder = "Select Boss",
-                description = "Auto hunts the nearest boss; boss NPCs are detected via their BossInfo marker",
+                description = "Auto hunts the nearest boss the archive has not credited yet; bosses are detected via their BossInfo marker",
                 forgetState = true,
                 callback = function(option)
-                        AutoBossController.setBoss(normalizeChoice(option))
+                        BossFarmController.setBoss(normalizeChoice(option))
                 end,
         })
         local bossOptionsRow = MainTab:CreateGroup()
         local bossAttackToggle
         bossAttackToggle = bossOptionsRow:CreateToggle({
                 name = "Auto Attack Boss",
-                value = false,
+                description = "Swings while the offset is held",
+                value = true,
                 flag = "BossAutoAttack",
                 callback = function(value)
-                        AutoBossController.setAutoAttack(value)
+                        BossFarmController.setAutoAttack(value)
                 end,
         })
         Elements.bossAttackToggle = bossAttackToggle
-        local bossDetectToggle
-        bossDetectToggle = bossOptionsRow:CreateToggle({
-                name = "Boss Detection",
-                value = false,
-                flag = "BossDetection",
-                callback = function(value)
-                        AutoBossController.setDetection(value)
+        MainTab:CreateDropdown({
+                name = "Boss Position",
+                options = TargetFollow.POSITIONS,
+                value = "Behind",
+                description = "Where you stand relative to the boss - the offset follows the boss as it moves",
+                flag = "BossTargetPosition",
+                callback = function(option)
+                        BossFarmController.setPosition(normalizeChoice(option))
                 end,
         })
-        Elements.bossDetectToggle = bossDetectToggle
-        Elements.bossBlock = MainTab:CreateText({
+        local bossDistanceRow = MainTab:CreateGroup()
+        bossDistanceRow:CreateSlider({
+                name = "Boss Distance",
+                range = { 0, 40 },
+                increment = 1,
+                suffix = " studs",
+                value = 6,
+                flag = "BossTargetDistance",
+                callback = function(value)
+                        BossFarmController.setDistance(value)
+                end,
+        })
+        MainTab:CreateDropdown({
+                name = "Boss Movement Method",
+                options = { "Instant", "Tween" },
+                value = "Instant",
+                description = "Instant snaps to the offset when it drifts; Tween glides. Never walks.",
+                flag = "BossMoveMethod",
+                callback = function(option)
+                        BossFarmController.setMethod(normalizeChoice(option))
+                end,
+        })
+        Elements.bossFarmBlock = MainTab:CreateText({
                 name = "Boss Status",
-                text = "State: " .. AutoBossController.getStatusText()
-                        .. "\nBoss: " .. AutoBossController.getBossText(),
+                text = "State: " .. BossFarmController.getStatusText()
+                        .. "\nBoss: " .. BossFarmController.getBossText(),
         })
         Elements.bossHealth = tryCreate(MainTab, "CreateProgress", {
                 name = "Boss Health",
@@ -6085,14 +6733,14 @@ buildTab("Main", function()
                         if not GameDetector.requireGame("Boss Selection") then
                                 return
                         end
-                        local options = AutoBossController.getBossOptions()
+                        local options = BossFarmController.getBossOptions()
                         if #options > 0 then
                                 pcall(function()
                                         bossDropdown:Refresh(options)
                                 end)
-                                Util.notify("Auto Boss", #options .. " boss(es) loaded")
+                                Util.notify("Boss Farm", #options .. " boss(es) loaded")
                         else
-                                Util.notify("Auto Boss", "No boss data in game profile yet")
+                                Util.notify("Boss Farm", "No boss data in game profile yet")
                         end
                 end,
         })
@@ -6102,7 +6750,7 @@ buildTab("Main", function()
         local killAuraToggle
         killAuraToggle = MainTab:CreateToggle({
                 name = "Kill Aura",
-                description = "Automatically attacks the current Auto Quest target or the selected boss",
+                description = "Attacks the current Auto Level target, the Boss Farm boss, or the nearest mob in range",
                 value = false,
                 flag = "SetKillAura",
                 callback = function(value)
@@ -6176,12 +6824,12 @@ buildTab("Main", function()
         lockUntilRelease(refreshTargetsButton)
 
         MainTab:CreateSection({ name = "Movement" })
-        -- shared MovementHandler: every automation and the Teleports tab travel through it
+        -- shared MovementHandler one-shot travel: the Teleports tab and quest-giver hops
         MainTab:CreateDropdown({
-                name = "Movement Method",
+                name = "Travel Method",
                 options = { "Instant", "Tween" },
                 value = "Instant",
-                description = "Instant snaps you to the objective; Tween glides there smoothly. Never walks.",
+                description = "Applies to Teleports and quest-giver trips. Target following uses each feature's own method above. Never walks.",
                 flag = "FarmMoveMethod",
                 callback = function(option)
                         MovementHandler.setMethod(normalizeChoice(option))
@@ -6296,7 +6944,7 @@ buildTab("Main", function()
         })
         MainTab:CreateText({
                 name = "Recovery",
-                text = "Movement Method applies to Auto Quest, Auto Demon, Auto Boss and Teleports. Instant teleports directly onto the objective; Tween glides there at the configured speed. If you rubber-band, the game is validating movement - switch methods or move manually.",
+                text = "Quest-giver trips and Teleports use the Travel Method above (one trip each). Auto Level, Boss Farm and Spider Lily following hold a configured offset that moves with the target - no teleport spam. If you rubber-band, the game is validating movement - switch methods or move manually.",
         })
 
         -- Game-data dropdowns populate the moment the profile loads
@@ -6309,7 +6957,10 @@ buildTab("Main", function()
                         questDropdown:Refresh(options)
                 end)
                 pcall(function()
-                        bossDropdown:Refresh(AutoBossController.getBossOptions())
+                        questSystemDropdown:Refresh({ "Auto Detect" })
+                end)
+                pcall(function()
+                        bossDropdown:Refresh(BossFarmController.getBossOptions())
                 end)
         end)
 
@@ -6329,24 +6980,28 @@ buildTab("Main", function()
                 local lastBossHealth = -1
                 while Tracker.isRunning("automationstatus") do
                         task.wait(2)
-                        syncText("questBlock", "State: " .. AutoQuestController.getStatusText()
+                        syncText("levelBlock", "State: " .. AutoLevelController.getStatusText()
+                                .. "\nQuest: " .. AutoLevelController.getQuestText()
+                                .. "\nTarget: " .. AutoLevelController.getTargetText()
+                                .. "\nProgress: " .. AutoLevelController.getProgressText())
+                        syncText("questSystemBlock", "State: " .. AutoQuestController.getStatusText()
                                 .. "\nQuest: " .. AutoQuestController.getQuestText()
-                                .. "\nTarget: " .. AutoQuestController.getTargetText()
+                                .. "\nGiver: " .. AutoQuestController.getGiverText()
                                 .. "\nProgress: " .. AutoQuestController.getProgressText())
-                        syncText("demonBlock", "State: " .. AutoDemonController.getStatusText()
-                                .. "\nCurrent: " .. AutoDemonController.getLilyText()
-                                .. "\nDetection: " .. AutoDemonController.getDetectionText())
-                        syncText("bossBlock", "State: " .. AutoBossController.getStatusText()
-                                .. "\nBoss: " .. AutoBossController.getBossText())
+                        syncText("lilyBlock", "State: " .. SpiderLilyController.getStatusText()
+                                .. "\nCurrent: " .. SpiderLilyController.getLilyText()
+                                .. "\nDetection: " .. SpiderLilyController.getDetectionText())
+                        syncText("bossFarmBlock", "State: " .. BossFarmController.getStatusText()
+                                .. "\nBoss: " .. BossFarmController.getBossText())
                         syncText("killAuraStatus", KillAuraController.getStatusText())
-                        local lilies = AutoDemonController.getCollected()
+                        local lilies = SpiderLilyController.getCollected()
                         if lilies ~= lastLilies then
                                 lastLilies = lilies
                                 pcall(function()
                                         Elements.statLilies:Set(lilies)
                                 end)
                         end
-                        local bossHealth = math.floor(AutoBossController.getHealthPct())
+                        local bossHealth = math.floor(BossFarmController.getHealthPct())
                         if bossHealth ~= lastBossHealth then
                                 lastBossHealth = bossHealth
                                 pcall(function()
@@ -6958,9 +7613,9 @@ buildTab("Server", function()
 end)
 
 buildTab("Config", function()
-        ConfigTab:CreateSection({ name = "Auto Quest Config" })
+        ConfigTab:CreateSection({ name = "Auto Level Config" })
         ConfigTab:CreateDropdown({
-                name = "Quest Combat Method",
+                name = "Auto Level Combat Method",
                 options = { "Melee", "Sword" },
                 value = "Melee",
                 description = "Melee fights bare-handed; Sword equips and swings your weapon",
@@ -6970,9 +7625,9 @@ buildTab("Config", function()
                 end,
         })
 
-        ConfigTab:CreateSection({ name = "Auto Boss Config" })
+        ConfigTab:CreateSection({ name = "Boss Farm Config" })
         ConfigTab:CreateDropdown({
-                name = "Boss Combat Method",
+                name = "Boss Farm Combat Method",
                 options = { "Melee", "Sword" },
                 value = "Melee",
                 description = "Melee fights bare-handed; Sword equips and swings your weapon",
@@ -6983,6 +7638,16 @@ buildTab("Config", function()
         })
 
         ConfigTab:CreateSection({ name = "Kill Aura Config" })
+        ConfigTab:CreateDropdown({
+                name = "Kill Aura Combat Method",
+                options = { "Melee", "Sword" },
+                value = "Melee",
+                description = "Used for targets Kill Aura acquires itself; quest and boss targets use their own feature's method",
+                flag = "SetKillAuraCombat",
+                callback = function(option)
+                        KillAuraController.setMethod(normalizeChoice(option))
+                end,
+        })
         local killAuraRow = ConfigTab:CreateGroup()
         killAuraRow:CreateSlider({
                 name = "Kill Aura Range",
